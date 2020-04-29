@@ -1,0 +1,145 @@
+---
+title: "jasss_bigrams"
+author: "Suschevskiy Vsevolod"
+date: "4/29/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyverse)
+library(rvest)
+library(purrr)
+library(stringr)
+
+library(tidytext)
+library(ggplot2)
+library(ggwordcloud)
+library(udpipe)
+library(data.table)
+library(stopwords)
+
+library(BTM)
+
+library(textplot)
+library(ggraph)
+```
+
+## bigrams
+
+```{r}
+bigrams <- jasss_texts_C %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+
+skip_5 <- jasss_texts_C %>%
+  unnest_tokens(bigram, text, token = "skip_ngrams", n = 5)
+```
+
+```{r}
+bigrams %>%
+  count(bigram, sort = TRUE)
+```
+
+```{r}
+bigrams_separated <- bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+
+abm_words = c("agent", "agents", "based", "model", "modeling", "models")
+
+jasss_words = c("simulation", "figure", "table", "10.1007", "doi", "et", "al", "0", "1", "international", "university", "press", "journal", "http", "artificial", "section", "press.", "york", "new", "cambridge", "respect", "pp.")
+
+
+bigrams_filtered <- bigrams_separated %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+  filter(!word1 %in% jasss_words) %>% 
+  filter(!word2 %in% jasss_words) %>% 
+  filter(!word1 %in% c(1:100)) %>% 
+  filter(!word2 %in% c(1:100)) %>% 
+  filter(!(word1 %in% abm_words & word2 %in% abm_words))
+
+# new bigram counts:
+bigram_counts <- bigrams_filtered %>% 
+  count(word1, word2, sort = TRUE) %>% na.omit()
+
+computational_words = c("cellular", "network", "logic", "discrete", "networks", "programming", "game", "rules", "decision", "nodes", "structure", "monte")
+behaviour_words = c("behaviour", "actor", "bias", "rule", "actors", "bounded", "norms")
+
+# bigram_counts %>% 
+#   mutate(n = n, word = paste(word1, word2, sep = " ")) %>% 
+#   mutate(color = ifelse(word1 %in% computational_words | word2 %in% computational_words, "comp", 
+#                  ifelse(word1 %in% behaviour_words | word2 %in% behaviour_words, "beh", "none"))) %>% 
+#   select(word, n, color) %>% 
+#   filter(n > 10) -> more_than_10
+
+bigram_counts %>% 
+  mutate(n = n, word = paste(word1, word2, sep = " ")) %>% 
+  mutate(color = ifelse(word1 %in% computational_words | word2 %in% computational_words, "comp", 
+                 ifelse(word1 %in% behaviour_words | word2 %in% behaviour_words, "beh", "none"))) %>% 
+  select(word, n, color) %>% 
+  filter(n > 150)# %>% 
+  ggplot(aes(label = word, size = n, color = color)) +
+  geom_text_wordcloud(rm_outside = T) +
+  scale_size_area(max_size = 20) +
+  scale_color_manual(values = c("red", "skyblue", "black"))+
+  theme_minimal()
+```
+
+
+
+## BNOSAC
+http://www.bnosac.be/index.php/blog/98-biterm-topic-modelling-for-short-texts
+
+```{r}
+x =  jasss_texts_C
+
+x$text   <- tolower(x$text)
+x$text   <- gsub("'", "", x$text)
+x$text   <- gsub("<.+>", "", x$text)
+names(x) = c("doc_id", "text")
+
+
+anno    <- udpipe(x, "english", trace = 10)
+biterms <- as.data.table(anno)
+biterms <- biterms[, cooccurrence(x = lemma,
+                                  relevant = upos %in% c("NOUN", "ADJ", "VERB") & 
+                                             nchar(lemma) > 2 & !lemma %in% stopwords("en") & !lemma %in% jasss_words,
+                                  skipgram = 3),
+                   by = list(doc_id)]
+```
+
+```{r}
+set.seed(123456)
+traindata <- subset(anno, upos %in% c("NOUN", "ADJ", "VERB") & !lemma %in% stopwords("en") & nchar(lemma) > 2)
+traindata <- traindata[, c("doc_id", "lemma")]
+model     <- BTM(traindata, biterms = biterms, k = 9, iter = 2000, background = TRUE, trace = 100)
+```
+
+```{r}
+terms(model)
+terms(model, top_n = 10)
+terms(model, threshold = 0.01, top_n = +Inf)
+bi <- terms(model, type = "biterms")
+str(bi)
+```
+
+
+
+## visualization
+
+```{r}
+#remotes::install_github("bnosac/textplot")
+
+
+plot(model, top_n = 10,
+     title = "BTM model", subtitle = "Articles "
+     
+     # ,labels = c("Garbage", "Neural Nets / Deep Learning", "Topic modelling", 
+     #            "Regression/Classification Trees/Forests", "Gradient Descent/Boosting", 
+     #            "GLM/GAM/Penalised Models", "NLP / Tokenisation",
+     #            "Text Mining Frameworks / API's", "Variable Selection in High Dimensions")
+     )
+```
+

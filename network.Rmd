@@ -1,0 +1,63 @@
+---
+title: "network_jasss"
+author: "Suschevskiy Vsevolod"
+date: "4/29/2020"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(rvest)
+library(purrr)
+library(stringr)
+
+library(tidytext)
+library(ggplot2)
+
+library(igraph)
+library(ggraph)
+```
+
+
+### to long
+
+```{r}
+jasss_authors %>% 
+  group_by(name) %>% 
+  select_if(function(x) !(all(is.na(x)) | all(x==""))) %>% 
+  pivot_longer(-name, values_to = "Author", names_to = "nothing") %>% 
+  select(-nothing) %>% 
+  na.omit() %>% 
+  mutate(Author = str_remove_all(Author, pattern = " *\\(.*?\\) *")) %>% 
+  ungroup()-> jasss_authors_long
+```
+
+### clean \n and \t
+
+```{r}
+jasss_authors_long %>% 
+  mutate(name = str_remove_all(name, "\n")) %>% 
+  mutate(name = str_remove_all(name, "\t")) %>% 
+  mutate(Author = str_remove_all(Author, "\n")) %>% 
+  mutate(Author = trimws(Author))  -> jasss_authors_long
+
+jasss_authors_long %>% select(Author) %>% unique() %>% summarise(n = n())
+```
+
+```{r}
+#jasss_graph =  graph_from_data_frame(jasss_authors_long, directed = F)
+```
+
+```{r}
+jasss_authors_long %>% head(15) %>% datapasta::dpasta()
+
+
+??dpasta
+```
+
+### References
+
+https://rpubs.com/pjmurphy/317838
+bipartite_projection()
+

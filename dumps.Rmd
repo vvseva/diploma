@@ -1,0 +1,337 @@
+---
+title: "JASSS_dump"
+author: "Suschevskiy Vsevolod"
+date: "4/15/2020"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(rvest)
+library(purrr)
+library(stringr)
+
+library(tidytext)
+library(ggplot2)
+library(ggwordcloud)
+```
+
+```{r}
+JASSS_index <- read_html("http://jasss.soc.surrey.ac.uk/index_by_issue.html")
+
+JASSS_index %>% 
+  html_nodes("blockquote :nth-child(1)") %>%  #%>% html_nodes("b")
+  map(xml_attrs) %>% 
+  map_df(~as.list(.)) %>% 
+  as_tibble() %>% 
+  filter(is.na(id)) %>% 
+  filter(!str_detect(href, "index_by_") | is.na(href)) %>% 
+  filter(!str_detect(href, "keywords") | is.na(href)) %>% 
+  select(href) %>% 
+  na.omit() %>% 
+  mutate(volume = str_remove_all(href, "http://jasss.soc.surrey.ac.uk/")) %>% 
+  mutate(volume = str_remove_all(volume, ".html")) %>% 
+  filter(!str_detect(href, "review")) %>% 
+  mutate(volume = str_replace(volume, "/[^/]*$","")) -> JASSS_index_tbl
+
+head(JASSS_index_tbl)
+```
+
+```{r}
+JASSS_index_tbl_no_ind = JASSS_index_tbl %>% select(href)
+
+write.table(JASSS_index_tbl_no_ind, file = "JASSS_hrefs.txt",
+            row.names = FALSE, col.names = FALSE)
+```
+
+
+
+```{r}
+wget ––random-wait -c -i ./diploma/jasss/JASSS_hrefs.txt -P ./diploma/jasss/html/
+  
+  
+wget ––random-wait -x -c -i ./diploma/jasss/JASSS_hrefs.txt -P ./diploma/jasss/html/
+
+-O article.html
+
+--timestamping
+
+wget ––random-wait -c --output-document=article$(date +%F_%T).html -i ./diploma/jasss/JASSS_hrefs.txt -P ./diploma/jasss/html/
+
+
+wget -w 10 -c --no-http-keep-alive -i ./diploma/jasss/JASSS_hrefs.txt
+wget ––random-wait -c --no-http-keep-alive -i ./diploma/jasss/JASSS_hrefs.txt
+
+http://jasss.soc.surrey.ac.uk/23/1/7.html
+
+
+wget ––random-wait -c -i ./diploma/jasss/JASSS_hrefs.txt
+
+curl -w 1 -kv -C ./diploma/jasss/JASSS_hrefs.txt -P ./diploma/jasss/html/
+```
+https://github.com/caddyserver/caddy/issues/1965
+
+## References
+
+https://stackoverflow.com/questions/19710898/regex-to-remove-everything-after-the-last-dot-in-a-file 
+
+
+## PArse texts
+
+```{r}
+
+url = "/students/vvsuschevskiy/bnlearn/diploma/jasss/html/jasss.soc.surrey.ac.uk/13/1/2.html"
+
+ if (length(read_html(url) %>%
+                 html_nodes(".arttitle") %>%
+                 html_text()) == 1) {
+        
+
+        read_html(url) %>%
+      html_nodes("h3, dd") %>%
+      html_text() %>%
+      as_tibble() %>%
+      mutate(name = read_html(url) %>%
+               html_nodes(".arttitle") %>%
+               html_text(),
+      author = read_html(url) %>%
+               html_nodes(".artauthor") %>%
+               html_text(),
+      doi = doi_t,
+      url = url
+      ) -> df
+   # %>%
+   #    bind_rows(jasss_texts) -> jasss_texts
+}
+```
+
+
+
+```{r}
+jasss_dirs =  list.dirs("~/bnlearn/diploma/jasss/html/jasss.soc.surrey.ac.uk")
+jasss_dirs = jasss_dirs[-1]
+
+
+#
+n = -1
+for (i in 1:23) {
+ jasss_dirs = jasss_dirs[n] 
+ n = n - 4
+}
+remove(n) # I have added 2 empty folders to the lates volume
+
+jasss_dirs
+
+jasss_texts = tibble(value = "text", name = "art name", author = "author_name", doi = "if doi", url = "url")
+
+
+for (i in jasss_dirs) {
+  for ( j in list.files(i) ) {
+    try({
+      
+      #### path
+      url = paste(i, j, sep = "/")
+      
+      
+      #### check doi
+      if (length(read_html(url) %>%
+               html_nodes(".artdoi") %>%
+               html_text()
+               ) != 1) {
+        doi_t = NA
+               } 
+      else
+               {
+                 doi_t = read_html(url) %>%
+               html_nodes(".artdoi") %>%
+               html_text() 
+               }
+      
+       if (length(read_html(url) %>%
+                 html_nodes("p+ p b font") %>%
+                 html_text()) == 1) {
+
+    read_html(url) %>%
+      html_nodes("h3, dd") %>%
+      html_text() %>%
+      as_tibble() %>%
+      mutate(
+        name = read_html(url) %>%
+          html_nodes("p+ p b font") %>%
+          html_text() %>% str_extract_all("(?<=').*?(?=')") %>%
+          as.character(),
+        author = read_html(url) %>%
+          html_nodes("p+ p b font") %>%
+          html_text() %>% str_replace_all("(?<=').*?(?=')", ""),
+        doi = doi_t,
+        url = url
+            ) %>%
+      bind_rows(jasss_texts) -> jasss_texts
+
+                 }
+      
+      
+    #   ### from 1
+    #   if (length(read_html(url) %>%
+    #              html_nodes("center b font") %>%
+    #              html_text()) == 1) {
+    # 
+    # read_html(url) %>%
+    #   html_nodes("h3, dd") %>%
+    #   html_text() %>%
+    #   as_tibble() %>%
+    #   mutate(
+    #     name = read_html(url) %>%
+    #       html_nodes("center b font") %>%
+    #       html_text(),
+    #     author = read_html(url) %>%
+    #       html_nodes("b font a") %>%
+    #       html_text(),
+    #     doi = doi_t,
+    #     url = url
+    #         ) %>%
+    #   bind_rows(jasss_texts) -> jasss_texts
+    #   }
+    #   
+    #   ### from 3
+    #   if (length((read_html(url) %>%
+    #              html_nodes("font") %>%
+    #              html_text())[3]) == 1) {
+    # 
+    # read_html(url) %>%
+    #   html_nodes("h3, dd") %>%
+    #   html_text() %>%
+    #   as_tibble() %>%
+    #   mutate(
+    #     name = (read_html(url) %>%
+    #              html_nodes("font") %>%
+    #              html_text())[3],
+    #     author = read_html(paste(i, j, sep = "/")) %>%
+    #       html_nodes("p:nth-child(3) font") %>%
+    #       html_text(),
+    #     doi = doi_t,
+    #     url = url
+    #         ) %>% bind_rows(jasss_texts) -> jasss_texts
+    #     
+    #   }
+
+      ### from 13
+      if (length(read_html(url) %>%
+                 html_nodes(".arttitle") %>%
+                 html_text()) == 1) {
+
+
+        read_html(url) %>%
+      html_nodes("h3, dd") %>%
+      html_text() %>%
+      as_tibble() %>%
+      mutate(name = read_html(url) %>%
+               html_nodes(".arttitle") %>%
+               html_text(),
+      author = read_html(url) %>%
+               html_nodes(".artauthor") %>%
+               html_text(),
+      doi = doi_t,
+      url = url) %>% bind_rows(jasss_texts) -> jasss_texts
+
+      }
+
+      ### from 20
+      if(length(read_html(url) %>%
+                html_nodes("h1") %>%
+                html_text()) == 1){
+
+        read_html(url) %>%
+      html_nodes("h3, p") %>%
+      html_text() %>%
+      as_tibble() %>%
+      mutate(name = read_html(url) %>%
+               html_nodes("h1") %>%
+               html_text(),
+      author = paste(read_html(url) %>%
+               html_nodes(".author") %>%
+               html_text(), collapse = " and "),
+      doi = doi_t,
+      url = url
+      ) %>%
+      bind_rows(jasss_texts) -> jasss_texts
+
+      }
+
+    },
+    silent = F)
+  
+  }
+}
+
+#jasss_texts %>% select(url) %>% unique() #-> #%>% summarise(n())
+
+
+##### IMPORTANT 2 ROWS
+jasss_texts$name[jasss_texts$name=="character(0)"] <- "NA"
+jasss_texts$author = str_replace_all(jasss_texts$author, " and ", ", ")
+
+#jasss_texts %>% select(-doi) %>% na.omit() %>% unique() %>% select(author) %>% unique()
+
+
+
+#jasss_texts %>% filter(author == "NA")
+```
+
+## Save1
+
+```{r}
+save(jasss_texts, file = "JASSS_textandname.RData")
+
+?save
+```
+
+
+```{r}
+jasss_texts %>% 
+  group_by(name, author) %>% 
+  summarise(text = paste(value, collapse = " ")) %>% 
+  unique() %>%  
+  na.omit() %>% 
+  filter(name != "NA") -> jasss_texts_C
+
+jasss_texts_C %>% filter(name == "NA")
+
+jasss_texts_C %>% group_by(name) %>% summarise(n = n()) %>% arrange(-n)
+```
+
+
+## Extract Name
+
+```{r}
+jasss_texts_C %>% select(-text) %>% separate(author, into =c("Author_1", "Author_2", "Author_3", "Author_4", "Author_5", "Author_6", "Author_7", "Author_8", "Author_9", "Author_10", "Author_11", "Author_12", "Author_13", "Author_14", "Author_15", "Author_16", "Author_17", "Author_18", "Author_19"), sep = ",") -> jasss_authors
+```
+
+
+```{r}
+jasss_texts %>% na.omit() %>% group_by(doi) %>% summarise(n = n())
+```
+```{r}
+jasss_texts %>% head(5) %>% select(value) %>% as.data.frame() %>% datapasta::dpasta()
+data.frame(
+  stringsAsFactors = FALSE,
+                value = c("Abstract",
+                          "\nOur GeoGraph 3D extensions to the RePast agent-based simulation platform support models in which mobile agents travel and interact on rugged terrain or on network landscapes such as social networks of established organizational teams or spatial networks at any scale from rooms within buildings to urban neighborhoods to large geographic networks of cities.  Interactive GeoGraph 3D visualizations allow researchers to zoom and pan within the simulation landscape as the model runs.  Model-specific 3D representations of agents flock together on terrain landscapes, and teleport or travel along links on network landscapes.  Agents may be displayed on network nodes either as individual agents or as dynamic 3D bar charts that reflect the composition of each node's population.  Batch modes support scientific control via fully separated random number series, customized parameter combinations, and automatic data collection for many thousands of simulation runs.  This paper introduces the GeoGraph 3D computational laboratory and briefly describes three representative GeoGraph models along with basic GeoGraph 3D capabilities and components.\n",
+                          "\nSimulation tools, Geographic Simulation, Network Landscapes, Epidemic Control, 3D Landscapes, GeoComputation, small-world\n","Introduction",
+                          "Human interactions of many kinds are increasingly structured by social, organizational, communication, and transportation networks.  Yet tools to model, understand, and predict dynamic human interactions and behavior on richly structured network and three-dimensional geographic terrain landscapes have lagged far behind.   A network landscape differs from a social network because the nodes represent established groups or geographic places rather than individual agents.  Each agent on a network landscape is free to move from one node to another in the landscape.  \n\n")
+   )
+
+```
+
+
+## fix headings 
+
+```{r}
+jasss_texts %>% head(15) %>%
+  mutate(len = ifelse(str_length(value)<30,value,NA)) %>% 
+  tidyr::fill(len, .direction="down")# %>% 
+  group_by(len) %>% 
+  summarise(text = str_c(value, collapse=T))
+```
+

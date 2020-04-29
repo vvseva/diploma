@@ -1,0 +1,150 @@
+---
+title: "JASSS"
+author: "Suschevskiy Vsevolod"
+date: "3/4/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(utils)
+library(dplyr)
+```
+
+```{r}
+my_data <- read.delim("diploma/jasss/savedrecs (3).txt", header = TRUE, sep = "\t", dec = ".",)
+my_data %>% 
+  rbind(read.delim("diploma/jasss/savedrecs (4).txt", header = TRUE, sep = "\t", dec = ".",)) %>% 
+  rbind(read.delim("diploma/jasss/savedrecs (5).txt", header = TRUE, sep = "\t", dec = ".",)) %>%
+    select_if(~ !any(is.na(.))) -> my_data
+```
+
+```{r}
+library(wordcloud2)
+library(tm)
+
+
+my_data %>% filter(PY >= 2010) %>% filter(AB != "") %>% group_by(UT) %>% summarise(n())
+```
+
+```{r}
+text <- my_data %>% select(AB)
+text <-  as.character(text$AB)
+text = na.omit(text)
+docs <- Corpus(VectorSource(text))
+
+
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+```
+
+## bigramms
+
+```{r}
+library("RWeka")
+
+library("tm")
+  data("crude")
+
+BigramTokenizer <- function(x) {
+  unlist(lapply(ngrams(words(x), 2), paste, collapse = " "), use.names = FALSE)
+} 
+
+tdm <- TermDocumentMatrix(crude, control = list(tokenize = BigramTokenizer))
+inspect(removeSparseTerms(tdm[, 1:10], 0.7))
+```
+
+
+
+```{r}
+dtm <- TermDocumentMatrix(docs, control = list(tokenize = BigramTokenizer)) 
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+```
+
+```{r}
+set.seed(1234) # for reproducibility 
+
+
+colfunc <- colorRampPalette(c("red", "skyblue"))
+colfunc(10)
+
+library(ggplot2)
+library(ggwordcloud)
+
+
+ggplot(df, aes(label = word, size = freq)) +
+  geom_text_wordcloud(rm_outside = T) +
+  scale_size_area(max_size = 20) +
+  scale_color_gradient(low = "red", high = "skyblue")+
+  theme_minimal()
+
+```
+
+```{r}
+wordcloud2(data=df, size=1, color='random-dark', maxRotation = 0)
+```
+
+
+## bigram 2
+
+```{r}
+library(dplyr)
+library(tidytext)
+library(janeaustenr)
+
+df = austen_books()
+
+bigrams <- my_data %>%
+  unnest_tokens(bigram, AB, token = "ngrams", n = 2)
+```
+
+
+```{r}
+bigrams %>%
+  count(bigram, sort = TRUE)
+```
+
+```{r}
+library(tidyr)
+
+bigrams_separated <- bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+
+abm_words = c("agent", "agents", "models", "model", "based")
+
+bigrams_filtered <- bigrams_separated %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>% 
+  filter(!word1 %in% abm_words) %>% 
+  filter(!word2 %in% abm_words)
+
+# new bigram counts:
+bigram_counts <- bigrams_filtered %>% 
+  count(word1, word2, sort = TRUE) %>% na.omit()
+
+computational_words = c("cellular", "network", "logic", "discrete", "networks", "programming", "game", "rules", "decision", "nodes", "structure", "monte")
+behaviour_words = c("behaviour", "actor", "bias", "rule", "actors", "bounded", "norms")
+
+bigram_counts %>% 
+  mutate(n = n, word = paste(word1, word2, sep = " ")) %>% 
+  mutate(color = ifelse(word1 %in% computational_words | word2 %in% computational_words, "comp", 
+                 ifelse(word1 %in% behaviour_words | word2 %in% behaviour_words, "beh", "none"))) %>% 
+  select(word, n, color) %>% 
+  filter(n > 2) %>% 
+  ggplot(aes(label = word, size = n, color = color)) +
+  geom_text_wordcloud(rm_outside = T) +
+  scale_size_area(max_size = 20) +
+  scale_color_manual(values = c("red", "skyblue", "black"))+
+  theme_minimal()
+```
+
+
