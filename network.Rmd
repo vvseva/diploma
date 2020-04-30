@@ -3,9 +3,12 @@ title: "network_jasss"
 author: "Suschevskiy Vsevolod"
 date: "4/29/2020"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r}
+library(tidyr)
 library(dplyr)
 library(tidyverse)
 library(rvest)
@@ -17,6 +20,7 @@ library(ggplot2)
 
 library(igraph)
 library(ggraph)
+
 ```
 
 
@@ -53,11 +57,85 @@ jasss_authors_long %>% select(Author) %>% unique() %>% summarise(n = n())
 jasss_authors_long %>% head(15) %>% datapasta::dpasta()
 
 
-??dpasta
+library(tidyr)
+library(dplyr)
+
+save(jasss_authors_long, file = "jasss_authors_long.RData")
+
+jasss_authors_long %>% 
+  head(15) %>% 
+  group_by(name) %>% 
+  group_modify(function(.data,.key){
+    .data$Author %>% 
+      crossing(.data$Author) %>% 
+      setNames(c("Author1", "Author2")) %>% 
+      filter(Author1 < Author2)
+    })
+
 ```
 
 ### References
 
 https://rpubs.com/pjmurphy/317838
 bipartite_projection()
+
+
+```{r}
+
+
+
+api_publications_authors %>% 
+  select(Publication_id, AuId) %>%
+  #mutate_all(as.character()) %>% 
+  rename(name = Publication_id, Author = AuId) %>% 
+  group_by(name) %>% 
+  group_modify(function(.data,.key){
+    .data$Author %>% 
+      crossing(.data$Author) %>% 
+      setNames(c("Author1", "Author2")) %>% 
+      filter(Author1 < Author2)
+    }) -> api_adjacency
+```
+
+```{r}
+
+# api_adjacency %>% 
+#   ungroup() %>% 
+#   filter(Author1 == "flaminio squazzoni" | Author1 == "flaminio squazzoni") %>% head(50) -> bois_temp
+
+api_adjacency %>% 
+  ungroup() %>% 
+  filter(Author1 %in% jasss_authors_api_n$AuId & Author2 %in% jasss_authors_api_n$AuId) %>% 
+  select(-name) %>% 
+  graph_from_data_frame(directed = F) %>% 
+  simplify() -> g_api
+
+# g_api = graph_from_data_frame(api_adjacency[1:1000,-1], directed = F)
+# g_api = simplify(g_api)
+
+V(g_api)$name %>% 
+  as_tibble() %>% 
+  mutate_all(as.numeric) %>% 
+  magrittr::set_colnames("AuId") %>% 
+  left_join(jasss_authors_api_n) -> graph_data
+
+
+V(g_api)$afN = graph_data$AfN
+V(g_api)$AuN = graph_data$AuN
+V(g_api)$size = degree(g_api)
+
+
+ggraph(g_api, layout = "fr")+
+  geom_edge_link(alpha = 0.1)+
+  # geom_node_point(alpha = 0.4)+
+  geom_node_text(aes(label = AuN, 
+                     #color = as.factor(afN), 
+                     size = size), check_overlap = T, repel = T)+
+  theme_graph()+
+  theme(legend.position = "none")
+
+?geom_node_text
+```
+
+
 
