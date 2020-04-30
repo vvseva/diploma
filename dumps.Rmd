@@ -8,6 +8,7 @@ output: html_document
 ```{r}
 library(dplyr)
 library(tidyverse)
+library(tidyr)
 library(rvest)
 library(purrr)
 library(stringr)
@@ -148,30 +149,44 @@ for (i in jasss_dirs) {
                html_text() 
                }
       
-       if (length(read_html(url) %>%
-                 html_nodes("p+ p b font") %>%
-                 html_text()) == 1) {
-
-    read_html(url) %>%
-      html_nodes("h3, dd") %>%
-      html_text() %>%
-      as_tibble() %>%
-      mutate(
-        name = read_html(url) %>%
-          html_nodes("p+ p b font") %>%
-          html_text() %>% str_extract_all("(?<=').*?(?=')") %>%
-          as.character(),
-        author = read_html(url) %>%
-          html_nodes("p+ p b font") %>%
-          html_text() %>% str_replace_all("(?<=').*?(?=')", ""),
-        doi = doi_t,
-        url = url
-            ) %>%
-      bind_rows(jasss_texts) -> jasss_texts
-
-                 }
       
+        ### check headings
+      if (length(read_html(url) %>%
+               html_nodes("h3") %>%
+               html_text()
+               ) > 1) {
+        headings = read_html(url) %>%
+               html_nodes("h3") %>%
+               html_text()
+      } else {
+                 
+        headings = NA
+               }
       
+    #    if (length(read_html(url) %>%
+    #              html_nodes("p+ p b font") %>%
+    #              html_text()) == 1) {
+    # 
+    # read_html(url) %>%
+    #   html_nodes("h3, dd") %>%
+    #   html_text() %>%
+    #   as_tibble() %>%
+    #   mutate(
+    #     name = read_html(url) %>%
+    #       html_nodes("p+ p b font") %>%
+    #       html_text() %>% str_extract_all("(?<=').*?(?=')") %>%
+    #       as.character(),
+    #     author = read_html(url) %>%
+    #       html_nodes("p+ p b font") %>%
+    #       html_text() %>% str_replace_all("(?<=').*?(?=')", ""),
+    #     doi = doi_t,
+    #     url = url
+    #         ) %>%
+    #   bind_rows(jasss_texts) -> jasss_texts
+    # 
+    #              }
+    # 
+    # 
     #   ### from 1
     #   if (length(read_html(url) %>%
     #              html_nodes("center b font") %>%
@@ -233,7 +248,9 @@ for (i in jasss_dirs) {
                html_nodes(".artauthor") %>%
                html_text(),
       doi = doi_t,
-      url = url) %>% bind_rows(jasss_texts) -> jasss_texts
+      url = url) %>% 
+      mutate(is_heading = ifelse(value %in% headings, value, NA)) %>% 
+          bind_rows(jasss_texts) -> jasss_texts
 
       }
 
@@ -255,6 +272,7 @@ for (i in jasss_dirs) {
       doi = doi_t,
       url = url
       ) %>%
+      mutate(is_heading = ifelse(value %in% headings, value, NA)) %>% 
       bind_rows(jasss_texts) -> jasss_texts
 
       }
@@ -274,7 +292,7 @@ jasss_texts$author = str_replace_all(jasss_texts$author, " and ", ", ")
 
 #jasss_texts %>% select(-doi) %>% na.omit() %>% unique() %>% select(author) %>% unique()
 
-
+remove(doi_t, headings, i, j, jasss_dirs, url)
 
 #jasss_texts %>% filter(author == "NA")
 ```
@@ -328,10 +346,34 @@ data.frame(
 ## fix headings 
 
 ```{r}
-jasss_texts %>% head(15) %>%
-  mutate(len = ifelse(str_length(value)<30,value,NA)) %>% 
-  tidyr::fill(len, .direction="down")# %>% 
-  group_by(len) %>% 
-  summarise(text = str_c(value, collapse=T))
+jasss_trash_headings = c("© Copyright JASSS 2020", "✔")
+
+
+  # # mutate(len = ifelse(str_length(value) < 40, value, NA)) %>% 
+  # # #filter(!is.na(len)) %>% 
+  # tidyr::fill(len, .direction="down") %>% 
+
+jasss_texts %>% 
+  mutate(value = str_replace_all(value, "\r", " ") %>% str_replace_all("\n", "")) %>% 
+  mutate(is_heading = str_replace_all(is_heading, "\r", " ") %>%
+           str_replace_all("\n", "") %>% 
+           str_replace_all("\t", "") %>% 
+           trimws()) %>% 
+    mutate(name = str_replace_all(name, "\r", " ") %>%
+           str_replace_all("\n", "") %>% 
+           str_replace_all("\t", "") %>% 
+             trimws()) %>% 
+  filter(!value %in% jasss_trash_headings) %>% 
+  filter(!str_detect(value, "Home > ")) %>% 
+    filter(!str_detect(value, "Javascript is disabled in your browser.")) %>% 
+  tidyr::fill(is_heading, .direction="down") %>%
+  group_by(is_heading, name, author, doi) %>% 
+  summarise(text = str_c(value, collapse = " ")) %>% 
+  filter(!is.na(doi)) %>% 
+  na.omit() %>% 
+  filter(doi != "if doi")-> jasss_texts_d
+  
+  
+remove(jasss_trash_headings)
 ```
 
