@@ -238,7 +238,7 @@ for (i in jasss_dirs) {
 
 
         read_html(url) %>%
-      html_nodes("h3, dd") %>%
+      html_nodes("h3, dd, p") %>%
       html_text() %>%
       as_tibble() %>%
       mutate(name = read_html(url) %>%
@@ -300,7 +300,8 @@ remove(doi_t, headings, i, j, jasss_dirs, url)
 ## Save1
 
 ```{r}
-save(jasss_texts, file = "JASSS_textandname.RData")
+save(jasss_texts, file = "JASSS_textandname2.RData")
+#save(jasss_texts, file = "JASSS_textandname.RData")
 
 ?save
 ```
@@ -308,7 +309,7 @@ save(jasss_texts, file = "JASSS_textandname.RData")
 
 ```{r}
 jasss_texts %>% 
-  group_by(name, author) %>% 
+  group_by(name, author, doi) %>% 
   summarise(text = paste(value, collapse = " ")) %>% 
   unique() %>%  
   na.omit() %>% 
@@ -346,7 +347,7 @@ data.frame(
 ## fix headings 
 
 ```{r}
-jasss_trash_headings = c("© Copyright JASSS 2020", "✔")
+jasss_trash_headings = c("© Copyright JASSS 2020", "✔", "	 © Copyright JASSS 2020 ")
 
 
   # # mutate(len = ifelse(str_length(value) < 40, value, NA)) %>% 
@@ -364,16 +365,79 @@ jasss_texts %>%
            str_replace_all("\t", "") %>% 
              trimws()) %>% 
   filter(!value %in% jasss_trash_headings) %>% 
-  filter(!str_detect(value, "Home > ")) %>% 
-    filter(!str_detect(value, "Javascript is disabled in your browser.")) %>% 
+  filter(!str_detect(value, "Home > "))  %>% 
+    filter(!str_detect(value, "Javascript is disabled in your browser.") &
+             !str_detect(value, "Journal of Artificial Societies and Social Simulation .+") &
+                           !str_detect(value, "Received: .+") &
+             !str_detect(value, " JASSSFrom Google")& 
+             !str_detect(value, "Copyright JASSS 2020")) %>% 
+  group_by(name, author, doi) %>% 
   tidyr::fill(is_heading, .direction="down") %>%
   group_by(is_heading, name, author, doi) %>% 
-  summarise(text = str_c(value, collapse = " ")) %>% 
+  summarise(text = str_c(value, collapse = " ")) %>%
   filter(!is.na(doi)) %>% 
   na.omit() %>% 
+  ungroup() %>% 
+  mutate(is_heading = is_heading %>% str_to_lower()) %>% 
   filter(doi != "if doi")-> jasss_texts_d
   
-  
 remove(jasss_trash_headings)
+```
+
+```{r}
+nrow(jasss_texts_d %>% select(doi) %>% unique())
+
+jasss_texts_d %>% group_by(is_heading) %>% count() %>% arrange(-n) ->df
+
+
+jasss_texts_d %>% filter(str_detect(is_heading, "model"))  %>% group_by(doi) %>% count() %>% arrange(-n) -> texts_with_model
+
+jasss_texts_d %>% filter(str_detect(is_heading, "conclusion"))  %>% group_by(is_heading) %>% count() %>% arrange(-n)
+
+jasss_texts_d %>% filter(str_detect(is_heading, "introduction"))  %>% group_by(is_heading) %>% count() %>% arrange(-n)
+
+jasss_texts_d %>% filter(str_detect(is_heading, "method"))  %>% group_by(is_heading) %>% count() %>% arrange(-n)
+
+jasss_texts_d %>% filter(str_detect(is_heading, "appendix"))  %>% group_by(is_heading) %>% count() %>% arrange(-n)
+
+
+jasss_texts_d %>% filter(str_detect(is_heading, "note"))  %>% group_by(doi) %>% count() %>% arrange(-n)
+
+
+jasss_texts_d %>% filter(str_detect(is_heading, "data"))  %>% group_by(is_heading) %>% count() %>% arrange(-n)
+
+jasss_texts_d %>% filter(str_detect(is_heading, "literature"))  %>% group_by(doi) %>% count() %>% arrange(-n)
+
+jasss_texts_d %>% filter(str_detect(is_heading, "theor"))  %>% group_by(is_heading) %>% count() %>% arrange(-n)
+```
+
+
+```{r}
+jasss_texts_d %>% filter(!doi %in% texts_with_model$doi) %>% select(name) %>% unique()
+```
+
+```{r}
+doi_topic_stm_extra %>% select(document, topic) ->doi_stm
+
+
+# strings <- c("abstract", "references", "introduction", "literature", "theor", "review", "overview", "discussion", "systems approach", "introduction", "acknowledg", "background", "concept", "related", "trends", "current", "applications", "memoriam", "systems", "note", "implications")
+# 
+# strings2 <- c("abstract", "references", "introduction", "literature", "theor", "review", "overview", "discussion", "systems approach", "introduction", "acknowledg", "background", "concept", "related", "trends", "current")
+
+
+
+jasss_texts_d %>% 
+  filter(doi %in% doi_stm$document) %>% 
+  filter(str_detect(is_heading %>% str_to_lower(), "model") | !str_detect(is_heading %>% str_to_lower(), "framework")) %>% 
+  select(doi) %>% unique() ->doi_stm_model
+
+
+
+bad_names =c("Agent-Based Modelling: The Next 15 Years", "Commuting Network Models: Getting the Essentials", "For an Integrated Approach to Agent-Based Modeling of Science", "Is Social Simulation a Social Science Outstation? A Bibliometric Analysis of the Impact of JASSS", "The Surprising Success of a Replication That Failed", "Web Citations Analysis of the JASSS: the First Ten Years", "Why Simulate? To Develop a Mental Model", "‘One Size Does Not Fit All’: A Roadmap of Purpose-Driven Mixed-Method Pathways for Sensitivity Analysis of Agent-Based Models", "A Brief Survey of Some Relevant Philosophy of Science", "A Context- and Scope-Sensitive Analysis of Narrative Data to Aid the Specification of Agent Behaviour", '"Anarchy" Reigns: A Quantitative Analysis of Agent-Based Modelling Publication Practices in JASSS, 2001-2012', "A Practical Guide for the Creation of Random Number Sequences from Aggregated Correlation Data for Multi-Agent Simulations", "A Survey of Agent Platforms", "An Agent Operationalization Approach for Context Specific Agent-Based Modeling", "Bibliometrics, Stylized Facts and the Way Ahead: How to Build Good Social Simulation Models of Science?", "Conference Models to Bridge Micro and Macro Studies of Science", "Different Modelling Purposes", "Editorial: Meeting Grand Challenges in Agent-Based Models", "Emotion Modeling in Social Simulation: A Survey", "Engineering Agent-Based Social Simulations: An Introduction", "Explanation in Agent-Based Modelling: Functions, Causality or Mechanisms?", "Fill in the Gap. A New Alliance for Social and Natural Sciences", "From Participants to Agents: Grounded Simulation as a Mixed-Method Research Design", "How Do Agents Make Decisions? A Survey", "Improving Execution Speed of Models Implemented in NetLogo", "Improving Execution Speed of Models Implemented in NetLogo", "Macroeconomic Policy in DSGE and Agent-Based Models Redux: New Developments and Challenges Ahead", "MAIA: a Framework for Developing Agent-Based Social Simulations", "Mamdani Fuzzy Systems for Modelling and Simulation: A Critical Assessment", "Metamodels for Evaluating, Calibrating and Applying Agent-Based Models: A Review", "ODD Updated", "ODD+2D: An ODD Based Protocol for Mapping Data to Empirical ABMs", "PyNetLogo: Linking NetLogo with Python", "Recent Development of Social Simulation as Reflected in JASSS Between 2008 and 2014: A Citation and Co-Citation Analysis", "Simulating What?", "Simulation Design: Trans-Paradigm Best-Practice from Software Engineering", "Simulation-Based Definitions of Emergence", "The ABM Template Models: A Reformulation with Reference Implementations", "The Current State of Normative Agent-Based Systems", "The ODD Protocol for Describing Agent-Based and Other Simulation Models: A Second Update to Improve Clarity, Replication, and Structural Realism", "The Practice of Archiving Model Code of Agent-Based Models", "UML for ABM", "VALFRAM: Validation Framework for Activity-Based Models", "Which Sensitivity Analysis Method Should I Use for My Agent-Based Model?")
+# Thomas C. Schelling and the Computer: Some Notes on Schelling's Essay "On Letting a Computer Help with the Work"
+  
+jasss_texts_d %>% 
+  filter(doi %in% doi_stm_model$doi) %>% 
+  filter (!name %in% bad_names) -> jasss_texts_modeling
 ```
 
