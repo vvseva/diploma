@@ -1,0 +1,1399 @@
+---
+title: "journalasaword"
+author: "Suschevskiy Vsevolod"
+date: "5/2/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+library(mallet)
+library(LDAvis)
+library(dplyr)
+library(stopwords)
+library(readr)
+library(stringr)
+library(tidytext)
+#write_lines(stopwords("en"), "stopwords.txt")
+
+
+library(ggplot2)
+library(purrr)
+library(tidyr)
+library(scales)
+library(kableExtra)
+```
+
+As a first step, mallet has to process documents texts to tokenize texts
+and to collect usage statistics. Document IDs and Document contents
+should be passed to it as character vectors. Note, that doc ids should
+be strings, not numbers, hence `as.character`.
+
+
+### loadjournals cleaning
+
+```{r}
+bad_journals = c("한국정보과학회 학술발표논문집", "Επιθεώρηση Κοινωνικών Ερευνών",
+                 "Социально-экономические явления и процессы", "創価経済論集", "日本社会情報学会学会誌", "(2005)", "(2016), doi:10.1594/WDCC/CHELSA_v1_1", "1/2015", "10-107/1", "11-109/3", 1:100, "177", "Journal of Artificial Societies and Social Simulation")
+
+
+api_publications_journals %>% 
+  select(AuId, Journal_name) %>% 
+  filter(!Journal_name %in% bad_journals) %>% 
+  na.omit() %>% 
+  mutate(Journal_name_shrink = Journal_name %>% tolower() %>% str_replace_all("-", "") %>% str_replace_all("[^[:alnum:]]", " ") %>% str_replace_all("[[:digit:]]", " ") %>% trimws() %>% str_replace_all(" ", "")) %>% 
+  na.omit() -> journals
+
+
+journals %>% group_by(AuId) %>% summarise(all_journals = paste(Journal_name_shrink, collapse = " ")) -> journals_c
+```
+
+
+```{r}
+mallet.instances <- mallet.import(id.array=as.character(journals$AuId),
+                                  text.array=journals$Journal_name_shrink,
+                                  stoplist.file = "~/minore/rec_sys/stopwords.txt")
+```
+
+
+```{r}
+topic.model <- MalletLDA(num.topics=5) # number of topics
+topic.model$loadDocuments(mallet.instances) 
+topic.model$setAlphaOptimization(20, 50) # optimizing hyperparameters
+```
+
+Next we collect some statistics about the dictionary and frequency of
+tokens for later use.
+
+```{r}
+vocabulary <- topic.model$getVocabulary() # corpus dictionary
+
+#### experiment
+vocabulary %>% 
+  as_tibble() %>% 
+  rename(Journal_name_shrink = value) %>% 
+  group_by(Journal_name_shrink) %>% 
+  mutate(id_row = row_number()) %>% 
+  dplyr::inner_join(journals %>% select(-AuId) %>% unique() %>% group_by(Journal_name_shrink) %>% mutate(id_row = row_number()), by = c("Journal_name_shrink" ,"id_row")) %>%
+  select(-id_row) ->vocabulary2
+#vocabulary2 = as.character(vocabulary2$Journal_name)
+
+#vocabulary2 = as.character(vocabulary2$j_name)
+
+word.freqs <- mallet.word.freqs(topic.model) # frequency table
+## top frequent words (by doc frequency)
+word.freqs %>% arrange(desc(doc.freq)) %>% head(10)
+```
+
+```{r}
+topic.model$train(500)
+```
+
+Selecting the best topic for each token in 10 iterations.
+
+```{r}
+topic.model$maximize(10)
+```
+
+```{r}
+doc.topics <- mallet.doc.topics(topic.model, smoothed=TRUE, normalized=TRUE)
+```
+
+Word-topics table.
+
+```{r}
+topic.words <- mallet.topic.words(topic.model, smoothed=TRUE, normalized=TRUE)
+```
+
+Topic labels (3 top words)
+
+```{r}
+topic.labels <- mallet.topic.labels(topic.model, topic.words, 10)
+```
+
+
+
+Doc-topics table.
+
+```{r}
+doc.topics <- mallet.doc.topics(topic.model, smoothed=TRUE, normalized=TRUE)
+doc.topics_d <- as.data.frame(doc.topics)
+
+dt = tibble(topic = colnames(doc.topics_d)[apply(doc.topics_d,1,which.max)] )
+
+journals_out = journals %>% bind_cols( dt)
+
+journals_out %>% group_by(AuId) %>% count(topic)
+
+# doc.topics_v <- doc.topics_d[1,]
+# doc.topics_v <- as.numeric(doc.topics_v)
+# 
+# library(Hmisc)
+# 
+# my_corr <- function(x) {
+#   cor(doc.topics_v, as.numeric(x), method="spearman")
+# }
+# 
+# doc.topics_d$corrr <-  apply(doc.topics_d, 1, my_corr)
+# 
+# pred_num <- doc.topics_d %>% 
+#             mutate(AuId =  row_number()) #%>% 
+#   filter(corrr == max(corrr)) #%>% 
+#   select(AuId) %>% 
+#   as.numeric()
+
+
+# nice_recc <- data_text_all %>% filter(user == pred_num, rat == "POS") %>% select(all_movies)
+```
+
+Word-topics table.
+
+```{r}
+topic.words <- mallet.topic.words(topic.model, smoothed=TRUE, normalized=TRUE)
+```
+
+Topic labels (3 top words)
+
+```{r}
+topic.labels <- mallet.topic.labels(topic.model, topic.words, 15)
+```
+
+### Results Analysis: a Common Way
+
+Inspect the top-10 words for each topic and guess what they are about.
+
+```{r}
+for (k in 1:nrow(topic.words)) {
+    top <- paste(mallet.top.words(topic.model, topic.words[k,], 10)$words,collapse=" ")
+    cat(paste(k, top, "\n"))
+}
+```
+
+Inspect the first few documents with a given topic weight more than
+5%. We will define a function that does that for us.
+
+```{r}
+top.docs <- function(doc.topics, topic, docs, top.n=10) {
+    head(docs[order(-doc.topics[,topic])], top.n)
+}
+```
+
+An example:
+
+```{r}
+top.docs(doc.topics, 2, journals$Journal_name)
+```
+
+Visualizing topic similarity (hierarchical clustering) of topics.
+
+Similarity by topics co-ocurrence in documents.
+
+```{r}
+plot(mallet.topic.hclust(doc.topics, topic.words, 1), labels=topic.labels)
+```
+
+Similarity by the set of words in the topics.
+
+```{r}
+plot(mallet.topic.hclust(doc.topics, topic.words, 1), labels=topic.labels)
+```
+
+Balanced similarity by words and documents.
+
+```{r}
+plot(mallet.topic.hclust(doc.topics, topic.words, 0.5), labels=topic.labels)
+```
+
+## LDA: Interactive Visualization
+
+Install the required packages and load them.
+
+```{r eval=FALSE}
+# install.packages("LDAvis")
+# install.packages("servr")
+```
+
+```{r}
+library(LDAvis)
+library(servr)
+```
+
+To create this interactive visualization, the information on the
+length of all documents (in words) is required. We will count words
+using `str_count` function from `stringr` package.
+
+```{r}
+library(stringr)
+doc.length <- str_count(journals$Journal_name_shrink, boundary("word"))
+doc.length[doc.length==0] <- 0.000001 # avoid division by zero
+```
+
+Visualization setup.
+
+```{r}
+json <- createJSON(phi = topic.words, theta=doc.topics, doc.length=doc.length, vocab=vocabulary2, term.frequency=word.freqs$term.freq)
+
+save(json, file = "~/bnlearn/diploma/ldaVIS.RData")
+```
+
+Launch interactive interface.
+
+```{r eval=FALSE}
+serVis(json, out.dir="lda50", open.browser=TRUE, as.gist = F)
+
+`?serVis
+devtools::install_github('rOpenSci/gistr')
+
+
+
+```
+
+
+### visualization
+
+```{r}
+journals %>% 
+  group_by(AuId) %>% 
+  unique() %>% 
+  count() %>% 
+  ggplot(aes(n))+
+  geom_density()+
+  theme_minimal()+
+  ggtitle("density of unique journals of authors") +
+  xlab("Amount of journals")+
+  ylim(c(0, 0.05))
+
+journals %>% 
+  group_by(AuId) %>% 
+  count() %>% 
+  ggplot(aes(n))+
+  geom_density()+
+  theme_minimal()+
+  ggtitle("density of non-unique journals of authors") +
+  xlab("Amount of journals")+
+  ylim(c(0, 0.05))
+
+journals %>% 
+  left_join(jasss_authors_api_n %>% select(AuId, doi)) %>% 
+  select(-AuId) %>% 
+  group_by(doi) %>% 
+  unique() %>% 
+  count() %>% 
+  ggplot(aes(n))+
+  geom_density()+
+  theme_minimal()+
+  ggtitle("density of unique journals of authors who wrote the same paper") +
+  xlab("Amount of journals")+
+  ylim(c(0, 0.05))
+
+journals %>% 
+  left_join(jasss_authors_api_n %>% select(AuId, doi)) %>% 
+  select(-AuId) %>% 
+  group_by(doi) %>% 
+  count() %>% 
+  ggplot(aes(n))+
+  geom_density()+
+  theme_minimal()+
+  ggtitle("density of non-unique journals of authors who wrote the same paper") +
+  xlab("Amount of journals")+
+  ylim(c(0, 0.05))
+```
+
+
+
+### Model 2 LDA collapsed 
+
+
+```{r}
+journals %>% group_by(AuId) %>% summarise(all_journals = paste(Journal_name_shrink, collapse = " ")) -> journals_c
+
+mallet.instances <- mallet.import(id.array=as.character(journals_c$AuId),
+                                  text.array=journals_c$all_journals,
+                                  stoplist.file = "~/bnlearn/diploma/jasss/jasssNAME.txt")
+
+topic.model <- MalletLDA(num.topics=10) # number of topics
+topic.model$loadDocuments(mallet.instances) 
+topic.model$setAlphaOptimization(20, 50) # optimizing hyperparameters
+
+vocabulary <- topic.model$getVocabulary() # corpus dictionary
+
+#### experiment
+vocabulary %>% 
+  as_tibble() %>% 
+  rename(Journal_name_shrink = value) %>% 
+  group_by(Journal_name_shrink) %>% 
+  mutate(id_row = row_number()) %>% 
+  dplyr::inner_join(journals %>% select(-AuId) %>% unique() %>% group_by(Journal_name_shrink) %>% mutate(id_row = row_number()), by = c("Journal_name_shrink" ,"id_row")) %>%
+  select(-id_row) ->vocabulary3
+vocabulary3 = as.character(vocabulary3$Journal_name)
+
+#vocabulary3 = as.character(vocabulary3$j_name)
+
+word.freqs <- mallet.word.freqs(topic.model) # frequency table
+## top frequent words (by doc frequency)
+word.freqs %>% arrange(desc(doc.freq)) %>% head(10)
+
+
+topic.model$train(500)
+
+topic.model$maximize(10)
+
+doc.topics <- mallet.doc.topics(topic.model, smoothed=TRUE, normalized=TRUE)
+
+topic.words <- mallet.topic.words(topic.model, smoothed=TRUE, normalized=TRUE)
+
+topic.labels <- mallet.topic.labels(topic.model, topic.words, 10)
+
+doc.topics <- mallet.doc.topics(topic.model, smoothed=TRUE, normalized=TRUE)
+doc.topics_d <- as.data.frame(doc.topics)
+
+dt = tibble(topic = colnames(doc.topics_d)[apply(doc.topics_d,1,which.max)] )
+
+journals_out = journals_c %>% bind_cols(dt)
+
+journals_out %>% group_by(AuId) %>% count(topic)
+```
+
+
+
+```{r}
+library(stringr)
+doc.length <- str_count(journals_c$all_journals, boundary("word"))
+doc.length[doc.length==0] <- 0.000001 # avoid division by zero
+
+
+json2 <- createJSON(phi = topic.words, theta=doc.topics, doc.length=doc.length, vocab=vocabulary3, term.frequency=word.freqs$term.freq)
+
+save(json2, file = "~/bnlearn/diploma/jasss/LDAvis/5journals/ldaVIS.RData")
+```
+
+Launch interactive interface.
+
+```{r eval=FALSE}
+serVis(json2)
+```
+
+
+## STM
+
+
+### STM: Data preparation
+
+We prepare the data for modeling as a dfm (using quanteda package
+tools).
+
+```{r}
+# data_text_all <- rbind(data_text.wide, data_text_neg.wide)
+# data_text_all <- mutate(data_text_all, sent_id = row_number())
+
+data_text_all = journals_c
+
+
+library(stringr)
+library(tidytext)
+library(quanteda)
+us.dtm <- data_text_all %>%
+    unnest_tokens(word, all_journals) %>%
+    filter(word != "journalofartificialsocietiesandsocialsimulation") %>% 
+    count(AuId, word) %>%
+    cast_dfm(AuId, word, n)
+```
+
+
+```{r}
+# us.meta <- data_text_all %>% select(sent_id, rat, user)
+# docvars(us.dtm) <- us.meta
+```
+
+
+### searchK topics number
+
+```{r}
+processed = textProcessor(data_text_all$all_journals, 
+                          #metadata = data_text_all$AuId, 
+                          stem = F, removestopwords = F,
+                          lowercase =F, removenumbers =F,
+                          removepunctuation =F)
+
+processed$meta = data_text_all$AuId
+
+out <- prepDocuments(processed$documents, processed$vocab, processed$meta)
+
+docs <- out$documents
+vocab <- out$vocab
+meta <- out$meta
+
+kResult <- searchK(out$documents, out$vocab, 
+                   K=c(2,5,10,15, 20, 30, 40), 
+                   #prevalence=~rating+s(day),
+                   data=meta)
+plot(kResult)
+```
+
+### model
+
+
+```{r}
+library(stm)
+us.stm50 <- stm(us.dtm, K=0, 
+                # prevalence=~rat,
+                max.em.its=50, 
+                # data=us.meta,
+                init.type="Spectral", seed=8458)
+
+```
+
+
+#### vocab
+
+```{r}
+
+
+stm_vocab = us.stm50$vocab
+stm_vocab %>% 
+  as_tibble() %>% 
+  rename(Journal_name_shrink = value) %>% 
+  group_by(Journal_name_shrink) %>% 
+  mutate(id_row = row_number()) %>% 
+  dplyr::inner_join(journals %>% select(-AuId) %>% unique() %>% group_by(Journal_name_shrink) %>% mutate(id_row = row_number()), by = c("Journal_name_shrink" ,"id_row")) %>%
+  select(-id_row) -> stm_vocab_2
+stm_vocab_2 = as.character(stm_vocab_2$Journal_name)
+
+
+us.stm50$vocab = stm_vocab_2
+```
+
+
+
+```{r}
+plot(us.stm50, type="summary", xlim=c(0,.4))
+```
+
+```{r}
+plot(us.stm50, type="labels", topics=c(3,7,20))
+```
+
+```{r}
+plot(us.stm50, type="hist")
+```
+
+```{r}
+plot(us.stm50, type="perspectives", topics=c(7,10))
+```
+
+```{r}
+topicQuality(us.stm50, documents = us.dtm)
+```
+
+
+```{r}
+library(glmnet)
+#make a plot of the topics most predictive of "rating"
+out <- topicLasso(rat ~ 1, family="binomial", data=us.meta,stmobj=us.stm50)
+#generate some in-sample predictions
+pred <- predict(out, newx=us.stm50$theta,type="link")
+?predict
+#check the accuracy of the predictions
+table(pred, us.meta$rat)
+```
+
+
+## collapsed by articles
+
+
+```{r}
+journals %>% 
+  left_join(jasss_authors_api_n %>% select(AuId, doi)) %>% 
+  select(-AuId) %>% 
+  group_by(doi) %>% 
+  summarise(all_journals = paste(Journal_name_shrink, collapse = " ")) -> journals_c_by_doi
+```
+### searchK topics number 2
+
+```{r}
+
+
+
+processed = textProcessor(journals_c_by_doi$all_journals, 
+                          #metadata = journals_c_by_doi$doi, 
+                          stem = F, removestopwords = F,
+                          lowercase =F, removenumbers =F,
+                          removepunctuation =F)
+
+#processed$meta = data_text_all$AuId
+
+out <- prepDocuments(processed$documents, processed$vocab)
+
+docs <- out$documents
+vocab <- out$vocab
+meta <- out$meta
+
+kResult <- searchK(out$documents, out$vocab, 
+                   K=c(10,15, 20, 25, 30, 35, 40), 
+                   #prevalence=~rating+s(day),
+                   data=meta)
+plot(kResult)
+```
+
+#### references
+
+https://juliasilge.com/blog/evaluating-stm/
+
+### Training, evaluating, and interpreting topic models
+
+
+```{r}
+journals_c_by_doi %>%
+  unnest_tokens(word, all_journals, token = "words") %>%
+  add_count(word) %>%
+  filter(n > 3) %>%
+  select(-n) -> tidy_journals_c_by_doi
+```
+
+```{r}
+tidy_journals_c_by_doi %>% select(word) %>% unique()
+```
+
+
+```{r}
+journals_sparse <- tidy_journals_c_by_doi %>%
+  count(doi, word) %>%
+  cast_sparse(doi, word, n)
+```
+
+```{r}
+library(stm)
+library(furrr)
+plan(multiprocess)
+
+many_models <- data_frame(K = c(10,20, 27, 30, 33, 35, 40)) %>%
+  mutate(topic_model = future_map(K, ~stm(journals_sparse, K = .,
+                                          verbose = FALSE)))
+```
+
+```{r}
+heldout <- make.heldout(journals_sparse)
+
+k_result <- many_models %>%
+  mutate(exclusivity = map(topic_model, exclusivity),
+         semantic_coherence = map(topic_model, semanticCoherence, journals_sparse),
+         eval_heldout = map(topic_model, eval.heldout, heldout$missing),
+         residual = map(topic_model, checkResiduals, journals_sparse),
+         bound =  map_dbl(topic_model, function(x) max(x$convergence$bound)),
+         lfact = map_dbl(topic_model, function(x) lfactorial(x$settings$dim$K)),
+         lbound = bound + lfact,
+         iterations = map_dbl(topic_model, function(x) length(x$convergence$bound)))
+
+k_result
+```
+
+```{r}
+k_result %>%
+  transmute(K,
+            `Lower bound` = lbound,
+            Residuals = map_dbl(residual, "dispersion"),
+            `Semantic coherence` = map_dbl(semantic_coherence, mean),
+            `Held-out likelihood` = map_dbl(eval_heldout, "expected.heldout")) %>%
+  gather(Metric, Value, -K) %>%
+  ggplot(aes(K, Value, color = Metric)) +
+  geom_line(size = 1.5, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(x = "K (number of topics)",
+       y = NULL,
+       title = "Model diagnostics by number of topics",
+       subtitle = "These diagnostics indicate that a good number of topics would be around 60")+
+  theme_minimal()
+```
+
+```{r}
+k_result %>%
+  select(K, exclusivity, semantic_coherence) %>%
+  filter(K %in% c(10, 20, 30, 40)) %>%
+  unnest(cols = c(exclusivity, semantic_coherence)) %>%
+  mutate(K = as.factor(K)) %>%
+  ggplot(aes(semantic_coherence, exclusivity, color = K)) +
+  geom_point(size = 2, alpha = 0.7) +
+  labs(x = "Semantic coherence",
+       y = "Exclusivity",
+       title = "Comparing exclusivity and semantic coherence",
+       subtitle = "Models with fewer topics have higher semantic coherence for more topics, but lower exclusivity")+
+  theme_minimal()
+
+```
+
+
+```{r}
+topic_model <- k_result %>% 
+  filter(K == 30) %>% 
+  pull(topic_model) %>% 
+  .[[1]]
+
+topic_model
+```
+
+fix vocab
+
+```{r}
+
+
+
+stm_vocab = topic_model$vocab
+stm_vocab %>% 
+  as_tibble() %>% 
+  rename(Journal_name_shrink = value) %>% 
+  group_by(Journal_name_shrink) %>% 
+  mutate(id_row = row_number()) %>% 
+  dplyr::inner_join(journals %>% select(-AuId) %>% unique() %>% group_by(Journal_name_shrink) %>% mutate(id_row = row_number()), by = c("Journal_name_shrink" ,"id_row")) %>%
+  select(-id_row) -> stm_vocab_2
+stm_vocab_2 = as.character(stm_vocab_2$Journal_name)
+
+
+topic_model$vocab = stm_vocab_2
+```
+
+
+
+```{r}
+td_beta <- tidy(topic_model)
+
+td_beta
+```
+
+```{r}
+td_gamma <- tidy(topic_model, matrix = "gamma",
+                 document_names = rownames(journals_sparse))
+
+td_gamma
+```
+
+### doc topic
+
+```{r}
+td_gamma %>% 
+  group_by(document) %>% 
+  filter(gamma == max(gamma)) %>% 
+  left_join(jasss_authors_api_n, by = c("document" = "doi")) -> doi_topic_stm
+```
+
+
+```{r}
+doi_topic_stm %>% group_by(document) %>% count()
+jasss_texts_d %>% group_by(doi) %>% count()
+
+
+doi_topic_stm %>% 
+  select(document, topic) %>% 
+  unique() %>% 
+  full_join(jasss_texts_d, by = c("document" = "doi")) %>% 
+  group_by(document, topic) %>% 
+  filter(is_heading != "References") %>% 
+  summarise(text_full = paste(text, collapse = " ")) %>% 
+  mutate(topic = ifelse(is.na(topic), 100, topic)) ->
+jasss_texts_with_topics
+
+
+save(jasss_texts_with_topics, 
+     file = "~/bnlearn/diploma/textsWITHcategories.RData")
+```
+
+
+```{r}
+library(ggthemes)
+
+top_terms <- td_beta %>%
+  arrange(beta) %>%
+  group_by(topic) %>%
+  top_n(7, beta) %>%
+  arrange(-beta) %>%
+  select(topic, term) %>%
+  summarise(terms = list(term)) %>%
+  mutate(terms = map(terms, paste, collapse = ", ")) %>% 
+  unnest(cols = c(terms))
+
+gamma_terms <- td_gamma %>%
+  group_by(topic) %>%
+  summarise(gamma = mean(gamma)) %>%
+  arrange(desc(gamma)) %>%
+  left_join(top_terms, by = "topic") %>%
+  mutate(topic = paste0("Topic ", topic),
+         topic = reorder(topic, gamma))
+
+gamma_terms %>%
+  top_n(20, gamma) %>%
+  ggplot(aes(topic, gamma, label = terms, fill = topic)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(hjust = 0, nudge_y = 0.0005, size = 3,
+            family = "IBMPlexSans") +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0),
+                     limits = c(0, 0.09),
+                     labels = percent_format()) +
+  theme_tufte(base_family = "IBMPlexSans", ticks = FALSE) +
+  theme(plot.title = element_text(size = 16,
+                                  family="IBMPlexSans-Bold"),
+        plot.subtitle = element_text(size = 13)) +
+  labs(x = NULL, y = expression(gamma),
+       title = "Top 20 topics by prevalence in the jasss authors",
+       subtitle = "With the top words that contribute to each topic")
+```
+
+```{r}
+gamma_terms %>%
+  select(topic, gamma, terms) %>%
+  knitr::kable(digits = 3, format = "html", caption = "all the topics, ordered by prevalence",
+        col.names = c("Topic", "Expected topic proportion", "Top 7 terms"))
+```
+
+```{r}
+mod.out.corr <- topicCorr(topic_model)
+plot(mod.out.corr)
+```
+
+```{r}
+# library(stmCorrViz)
+
+# stmCorrViz(topic_model, "stm-interactive-correlation.html",
+#            documents_raw=
+#            #,
+#            #documents_matrix=out$documents
+#            )
+```
+
+
+more on visualization 
+
+https://cran.r-project.org/web/packages/stminsights/vignettes/intro.html
+
+### Fix 100 NA
+
+```{r}
+api_publications_journals_2 %>% 
+  anti_join(api_publications_journals, by = "Publication_id") %>% select(Journal_name, doi) %>% 
+  na.omit() 
+  
+
+api_publications_journals_2 %>% 
+              filter(!Journal_name %in% bad_journals) %>% 
+              na.omit() %>% 
+              mutate(Journal_name_shrink = 
+                       Journal_name %>% 
+                       tolower() %>% 
+                       str_replace_all("-", "") %>%
+                       str_replace_all("[^[:alnum:]]", " ") %>%
+                       str_replace_all("[[:digit:]]", " ") %>% 
+                       trimws() %>% 
+                       str_replace_all(" ", "")) %>% 
+              na.omit()%>% 
+  select(doi, Journal_name_shrink, Journal_name) -> 
+  journals_2
+  
+
+
+
+journals %>% 
+  left_join(jasss_authors_api_n %>% select(AuId, doi)) %>% 
+  select(-AuId) %>% 
+  bind_rows(journals_2) %>% 
+  group_by(doi) %>% 
+  summarise(all_journals = paste(Journal_name_shrink, collapse = " ")) -> journals_c_by_doi_extra
+
+journals_c_by_doi_extra %>% group_by(doi) %>% count()
+journals_c_by_doi %>% group_by(doi) %>% count()
+```
+
+
+### STM on fixed + 100 docs
+
+
+```{r}
+journals_c_by_doi_extra %>% 
+  ungroup()%>%
+  unnest_tokens(word, all_journals, token = "words") %>%
+  add_count(word) %>%
+  filter(n > 20) %>%
+  select(-n) -> tidy_journals_c_by_doi_extra
+```
+
+```{r}
+tidy_journals_c_by_doi_extra %>% select(word) %>% group_by(word) %>% count() %>% arrange(-n)
+```
+
+
+```{r}
+journals_sparse_extra <- tidy_journals_c_by_doi_extra %>%
+  count(doi, word) %>%
+  cast_sparse(doi, word, n)
+```
+
+```{r}
+library(stm)
+library(furrr)
+plan(multiprocess)
+
+many_models_extra <- data_frame(K = c(10, 15, 20, 25, 30, 35, 40, 60)) %>%
+  mutate(topic_model = future_map(K, ~stm(journals_sparse_extra, K = .,
+                                          verbose = FALSE)))
+```
+
+```{r}
+heldout_extra <- make.heldout(journals_sparse_extra)
+
+k_result_extra <- many_models_extra %>%
+  mutate(exclusivity = map(topic_model, exclusivity),
+         semantic_coherence = map(topic_model, semanticCoherence, journals_sparse_extra),
+         eval_heldout = map(topic_model, eval.heldout, heldout_extra$missing),
+         residual = map(topic_model, checkResiduals, journals_sparse_extra),
+         bound =  map_dbl(topic_model, function(x) max(x$convergence$bound)),
+         lfact = map_dbl(topic_model, function(x) lfactorial(x$settings$dim$K)),
+         lbound = bound + lfact,
+         iterations = map_dbl(topic_model, function(x) length(x$convergence$bound)))
+
+k_result_extra
+```
+
+```{r}
+k_result_extra %>%
+  transmute(K,
+            `Lower bound` = lbound,
+            Residuals = map_dbl(residual, "dispersion"),
+            `Semantic coherence` = map_dbl(semantic_coherence, mean),
+            `Held-out likelihood` = map_dbl(eval_heldout, "expected.heldout")) %>%
+  gather(Metric, Value, -K) %>%
+  ggplot(aes(K, Value, color = Metric)) +
+  geom_line(size = 2.5, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(x = "K (number of topics)",
+       y = NULL,
+       title = "Model diagnostics by number of topics",
+       subtitle = "These diagnostics indicate that a good number of topics would be around 25")+
+  theme_minimal()
+```
+
+```{r}
+k_result_extra %>%
+  select(K, exclusivity, semantic_coherence) %>%
+  filter(K %in% c(15, 20, 30, 25, 40, 60)) %>%
+  unnest(cols = c(exclusivity, semantic_coherence)) %>%
+  mutate(K = as.factor(K)) %>%
+  ggplot(aes(semantic_coherence, exclusivity, color = K)) +
+  geom_point(size = 2, alpha = 0.7) +
+  labs(x = "Semantic coherence",
+       y = "Exclusivity",
+       title = "Comparing exclusivity and semantic coherence",
+       subtitle = "Models with fewer topics have higher semantic coherence for more topics, but lower exclusivity")+
+  theme_minimal()
+
+```
+
+
+```{r}
+topic_model_extra <- k_result_extra %>% 
+  filter(K == 25) %>% 
+  pull(topic_model) %>% 
+  .[[1]]
+
+topic_model_extra
+```
+
+#### fix vocab
+
+```{r}
+
+
+
+stm_vocab_extra = topic_model_extra$vocab
+stm_vocab_extra %>% 
+  as_tibble() %>% 
+  rename(Journal_name_shrink = value) %>% 
+  group_by(Journal_name_shrink) %>% 
+  mutate(id_row = row_number()) %>% 
+  dplyr::left_join(journals %>% select(-AuId) %>% unique() %>% group_by(Journal_name_shrink) %>% mutate(id_row = row_number()), by = c("Journal_name_shrink" ,"id_row")) %>%
+  dplyr::left_join(journals_2 %>% unique() %>% group_by(Journal_name_shrink) %>% mutate(id_row = row_number()), by = c("Journal_name_shrink" ,"id_row")) %>%
+  select(-id_row) %>% 
+  mutate(Journal_name = ifelse(is.na(Journal_name.x), Journal_name.y, Journal_name.x))-> stm_vocab_extra_2
+
+stm_vocab_extra_2 = as.character(stm_vocab_extra_2$Journal_name)
+
+
+topic_model_extra$vocab = stm_vocab_extra_2
+```
+
+
+
+```{r}
+td_beta_extra <- tidy(topic_model_extra)
+
+td_beta_extra
+```
+
+```{r}
+td_gamma_extra <- tidy(topic_model_extra, matrix = "gamma",
+                 document_names = rownames(journals_sparse_extra))
+
+td_gamma_extra
+```
+
+### doc topic
+
+```{r}
+td_gamma_extra %>% 
+  group_by(document) %>% 
+  filter(gamma == max(gamma)) %>% 
+  left_join(jasss_authors_api_n, by = c("document" = "doi")) -> doi_topic_stm_extra
+
+doi_topic_stm_extra
+```
+
+
+```{r}
+doi_topic_stm_extra %>% group_by(document) %>% count()
+jasss_texts_d %>% group_by(doi) %>% count()
+
+
+doi_topic_stm_extra %>% 
+  select(document, topic) %>% 
+  unique() %>% 
+  full_join(jasss_texts_d, by = c("document" = "doi")) %>% 
+  group_by(document, topic) %>% 
+  filter(is_heading != "References") %>% 
+  summarise(text_full = paste(text, collapse = " ")) %>% 
+  mutate(topic = ifelse(is.na(topic), 100, topic)) ->
+jasss_texts_with_topics_extra
+```
+
+
+```{r}
+library(ggthemes)
+
+top_terms_extra <- td_beta_extra %>%
+  arrange(beta) %>%
+  group_by(topic) %>%
+  top_n(7, beta) %>%
+  arrange(-beta) %>%
+  select(topic, term) %>%
+  summarise(terms = list(term)) %>%
+  mutate(terms = map(terms, paste, collapse = ", ")) %>% 
+  unnest(cols = c(terms))
+
+gamma_terms_extra <- td_gamma_extra %>%
+  group_by(topic) %>%
+  summarise(gamma = mean(gamma)) %>%
+  arrange(desc(gamma)) %>%
+  left_join(top_terms_extra, by = "topic") %>%
+  mutate(topic = paste0("Topic ", topic),
+         topic = reorder(topic, gamma))
+
+gamma_terms_extra %>%
+  top_n(20, gamma) %>% knitr::kable()
+
+
+?kable
+  ggplot(aes(topic, gamma, label = terms, fill = topic)) +
+  geom_col(show.legend = FALSE, fill = "white", color = "black") +
+  # geom_text(hjust = 0, nudge_y = 0.0005,  size = 3,
+  #           family = "IBMPlexSans") +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0),
+                     limits = c(0, 0.09),
+                     labels = percent_format()) +
+  theme_tufte(base_family = "IBMPlexSans", ticks = FALSE) +
+  theme(plot.title = element_text(size = 16,
+                                  family="IBMPlexSans-Bold"),
+        plot.subtitle = element_text(size = 13)) +
+  labs(x = NULL, y = expression(gamma),
+       title = "Top 20 topics by prevalence among JASSS authors' journals",
+       subtitle = "With the top journals that contribute to each topic")
+```
+
+```{r}
+gamma_terms_extra %>%
+  select(topic, gamma, terms) %>%
+  knitr::kable(digits = 3, format = "latex", caption = "all the topics, ordered by prevalence",
+        col.names = c("Topic", "Expected topic proportion", "Top 7 terms"))
+```
+
+```{r}
+mod.out.corr_extra <- topicCorr(topic_model_extra)
+plot(mod.out.corr_extra)
+```
+
+
+## Metrics
+
+## FREX
+
+```{r}
+ labelTopics(topic_model_extra, c(8))
+```
+
+
+### T-SNE by word (Journal)
+
+```{r}
+td_beta_extra %>% 
+  pivot_wider(names_from = topic, values_from = beta) -> journals_beta
+```
+
+```{r}
+library(Rtsne)
+
+train = journals_beta
+## Curating the database for analysis with both t-SNE and PCA
+Labels<-train$term
+train$label<-as.factor(Labels)
+## for plotting
+colors = rainbow(length(unique(train$label)))
+names(colors) = unique(train$label)
+
+## Executing the algorithm on curated data
+tsne <- Rtsne(train[,-1], dims = 3, perplexity=10, verbose=TRUE, max_iter = 1000, pca = F)
+# exeTimeTsne<- system.time(Rtsne(train[,-1], dims = 3, perplexity=30, verbose=TRUE, max_iter = 500, pca =F))
+
+## Plotting
+plot(tsne$Y, t='n', main="tsne")
+text(tsne$Y, labels=train$label, col=colors[train$label])
+
+?Rtsne
+```
+
+```{r}
+library(plotly)
+
+
+p <- plot_ly(x = tsne$Y[,1], 
+             y = tsne$Y[,2], 
+             z = tsne$Y[,3],
+             color = train$term, size = 10, text = Labels)
+
+p%>% layout(showlegend = FALSE)
+```
+
+
+### By authors
+
+```{r}
+journals_c
+
+journals_c %>% 
+  ungroup()%>%
+  unnest_tokens(word, all_journals, token = "words") %>%
+  add_count(word) %>%
+  filter(n > 20) %>%
+  select(-n) -> tidy_journals_c
+
+
+
+journals_sparse_authors <- tidy_journals_c %>%
+  count(AuId, word) %>%
+  cast_sparse(AuId, word, n)
+```
+
+```{r}
+library(stm)
+library(furrr)
+plan(multiprocess)
+
+many_models_authors <- data_frame(K = c(10, 15, 20, 25, 30, 35, 40, 60)) %>%
+  mutate(topic_model = future_map(K, ~stm(journals_sparse_authors, K = .,
+                                          verbose = FALSE)))
+```
+
+```{r}
+heldout_authors <- make.heldout(journals_sparse_authors)
+
+k_result_authors <- many_models_authors %>%
+  mutate(exclusivity = map(topic_model, exclusivity),
+         semantic_coherence = map(topic_model, semanticCoherence, journals_sparse_authors),
+         eval_heldout = map(topic_model, eval.heldout, heldout_authors$missing),
+         residual = map(topic_model, checkResiduals, journals_sparse_authors),
+         bound =  map_dbl(topic_model, function(x) max(x$convergence$bound)),
+         lfact = map_dbl(topic_model, function(x) lfactorial(x$settings$dim$K)),
+         lbound = bound + lfact,
+         iterations = map_dbl(topic_model, function(x) length(x$convergence$bound)))
+
+
+k_result_authors %>%
+  transmute(K,
+            `Lower bound` = lbound,
+            Residuals = map_dbl(residual, "dispersion"),
+            `Semantic coherence` = map_dbl(semantic_coherence, mean),
+            `Held-out likelihood` = map_dbl(eval_heldout, "expected.heldout")) %>%
+  gather(Metric, Value, -K) %>%
+  ggplot(aes(K, Value, color = Metric)) +
+  geom_line(size = 2.5, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(x = "K (number of topics)",
+       y = NULL,
+       title = "Model diagnostics by number of topics",
+       subtitle = "These diagnostics indicate that a good number of topics would be around 25")+
+  theme_minimal()
+```
+
+```{r}
+topic_model_author <- k_result_authors %>% 
+  filter(K == 20) %>% 
+  pull(topic_model) %>% 
+  .[[1]]
+```
+
+```{r}
+stm_vocab_author = topic_model_author$vocab
+stm_vocab_author %>% 
+  as_tibble() %>% 
+  rename(Journal_name_shrink = value) %>% 
+  group_by(Journal_name_shrink) %>% 
+  mutate(id_row = row_number()) %>% 
+  dplyr::left_join(journals %>% select(-AuId) %>% unique() %>% group_by(Journal_name_shrink) %>% mutate(id_row = row_number()), by = c("Journal_name_shrink" ,"id_row")) %>%
+  dplyr::left_join(journals_2 %>% unique() %>% group_by(Journal_name_shrink) %>% mutate(id_row = row_number()), by = c("Journal_name_shrink" ,"id_row")) %>%
+  select(-id_row) %>% 
+  mutate(Journal_name = ifelse(is.na(Journal_name.x), Journal_name.y, Journal_name.x))-> stm_vocab_author_2
+
+stm_vocab_author_2 = as.character(stm_vocab_author_2$Journal_name)
+
+
+topic_model_author$vocab = stm_vocab_author_2
+```
+
+```{r}
+td_beta_author <- tidy(topic_model_author)
+
+td_beta_author
+
+td_gamma_author <- tidy(topic_model_author, matrix = "gamma",
+                 document_names = rownames(journals_sparse_authors))
+
+td_gamma_author
+```
+
+```{r}
+top_terms_author <- td_beta_author %>%
+  arrange(beta) %>%
+  group_by(topic) %>%
+  top_n(7, beta) %>%
+  arrange(-beta) %>%
+  select(topic, term) %>%
+  summarise(terms = list(term)) %>%
+  mutate(terms = map(terms, paste, collapse = ", ")) %>% 
+  unnest(cols = c(terms))
+
+gamma_terms_author <- td_gamma_author %>%
+  group_by(topic) %>%
+  summarise(gamma = mean(gamma)) %>%
+  arrange(desc(gamma)) %>%
+  left_join(top_terms_author, by = "topic") %>%
+  mutate(topic = paste0("Topic ", topic),
+         topic = reorder(topic, gamma))
+
+gamma_terms_author %>%
+  top_n(20, gamma) %>%
+# knitr::kable() %>% 
+ggplot(aes(topic, gamma, label = terms, fill = topic)) +
+  geom_col(show.legend = FALSE, fill = "white", color = "black") +
+  geom_text(hjust = 0, nudge_y = 0.0005,  size = 3,
+            family = "IBMPlexSans") +
+  coord_flip() +
+  scale_y_continuous(expand = c(0,0),
+                     limits = c(0, 0.09),
+                     labels = percent_format()) +
+  theme_tufte(base_family = "IBMPlexSans", ticks = FALSE) +
+  theme(plot.title = element_text(size = 16,
+                                  family="IBMPlexSans-Bold"),
+        plot.subtitle = element_text(size = 13)) +
+  labs(x = NULL, y = expression(gamma),
+       title = "Top 20 topics by prevalence among JASSS authors' journals",
+       subtitle = "With the top journals that contribute to each topic")
+```
+
+```{r}
+gamma_terms_author %>%
+  top_n(20, gamma) %>%
+knitr::kable()
+```
+
+### T-SNE by word (Author)
+
+```{r}
+td_gamma_author %>% 
+  mutate(document = document %>% as.numeric()) %>% 
+  left_join(jasss_authors_api %>% select(AuN, AuId), by = c("document"= "AuId")) %>% 
+  unique() %>% 
+  pivot_wider(names_from = topic, values_from = gamma) %>% select(-document) -> authors_gamma
+  
+```
+
+```{r}
+library(Rtsne)
+
+train = authors_gamma
+## Curating the database for analysis with both t-SNE and PCA
+Labels<-train$AuN
+train$label<-as.factor(Labels)
+## for plotting
+colors = rainbow(length(unique(train$label)))
+names(colors) = unique(train$label)
+
+## Executing the algorithm on curated data
+tsne <- Rtsne(train[,-1], dims = 2, perplexity=10, verbose=TRUE, max_iter = 1000, pca = F)
+# exeTimeTsne<- system.time(Rtsne(train[,-1], dims = 3, perplexity=30, verbose=TRUE, max_iter = 500, pca =F))
+
+## Plotting
+plot(tsne$Y, t='n', main="tsne")
+text(tsne$Y, labels=train$label, col=colors[train$label])
+
+?Rtsne
+```
+
+```{r}
+library(plotly)
+
+match(c("flaminio squazzoni"),Labels)
+
+p <- plot_ly(x = tsne$Y[,1], 
+             y = tsne$Y[,2], 
+             # z = tsne$Y[,3],
+             color = c(rep("Not flaminio squazzoni", 33), "flaminio squazzoni", rep("Not flaminio squazzoni", 556)) %>% as.factor,#train$term, 
+             colors = c('#d62728','#1f77b4'),
+             size = 10, text = Labels)
+p
+
+p%>% layout(showlegend = FALSE)
+```
+
+
+```{r}
+tidy_journals_c %>% 
+  left_join(jasss_authors_api %>% select(AuN, AuId)) %>% 
+  select(-AuId) %>% 
+  group_by(AuN) %>% 
+  count(word) %>% 
+  arrange(-n) %>% 
+  filter(AuN == "flaminio squazzoni")
+```
+
+```{r}
+td_gamma_author %>% 
+  filter(document == "290577071") %>% 
+  arrange(-gamma) %>% 
+  top_n(5) %>% 
+  left_join(gamma_terms_author %>% 
+    select(topic, terms) %>% 
+    mutate(topic = topic %>% as.character() %>% str_remove_all("Topic ") %>% as.numeric()), by = "topic") %>% 
+  knitr::kable()
+
+  
+  gamma_terms_author %>% 
+    select(topic, terms) %>% 
+    mutate(topic = topic %>% as.character() %>% str_remove_all("Topic ") %>% as.numeric())
+```
+
+```{r}
+authors_tsne = tsne$Y 
+```
+
+#### journal_space
+
+```{r}
+td_beta_author %>% 
+  pivot_wider(names_from = topic, values_from = beta) -> journals_beta
+```
+
+
+
+```{r}
+library(Rtsne)
+
+train = journals_beta
+## Curating the database for analysis with both t-SNE and PCA
+Labels<-train$term
+train$label<-as.factor(Labels)
+## for plotting
+colors = rainbow(length(unique(train$label)))
+names(colors) = unique(train$label)
+
+## Executing the algorithm on curated data
+tsne <- Rtsne(train[,-1], dims = 2, perplexity=10, verbose=TRUE, max_iter = 1000, pca = F)
+# exeTimeTsne<- system.time(Rtsne(train[,-1], dims = 3, perplexity=30, verbose=TRUE, max_iter = 500, pca =F))
+
+## Plotting
+plot(tsne$Y, t='n', main="tsne")
+text(tsne$Y, labels=train$label, col=colors[train$label])
+```
+
+```{r}
+library(plotly)
+
+
+p <- plot_ly(x = tsne$Y[,1], 
+             y = tsne$Y[,2], 
+             # z = tsne$Y[,3],
+             # color = train$term, 
+             size = 10, text = Labels)
+
+p%>% layout(showlegend = FALSE)
+```
+
+
+### k-mean
+
+```{r}
+library(factoextra)
+
+fviz_nbclust(authors_tsne, kmeans, method = "silhouette") +
+geom_vline(xintercept = 3, linetype = 2)
+
+fviz_nbclust(authors_tsne, kmeans, method = "wss") +
+geom_vline(xintercept = 3, linetype = 2)
+```
+
+```{r}
+set.seed(123)
+km.res <- kmeans(authors_tsne, 9, nstart = 25)
+```
+
+
+```{r}
+p <- plot_ly(x = tsne$Y[,1], 
+             y = tsne$Y[,2], 
+             # z = tsne$Y[,3],
+             color = km.res$cluster ,
+             # colors = c('#d62728','#1f77b4'),
+             size = 10, text = Labels)
+p
+
+p%>% layout(showlegend = FALSE)
+```
+
+```{r}
+library("dbscan")
+
+cl <- hdbscan(authors_tsne, minPts = 5)
+check <- rep(F, nrow(authors_tsne)-1)
+core_dist <- kNNdist(authors_tsne, k=5-1)
+
+## cutree doesn't distinguish noise as 0, so we make a new method to do it manually 
+cut_tree <- function(hcl, eps, core_dist){
+  cuts <- unname(cutree(hcl, h=eps))
+  cuts[which(core_dist > eps)] <- 0 # Use core distance to distinguish noise
+  cuts
+}
+
+eps_values <- sort(cl$hc$height, decreasing = T)+.Machine$double.eps ## Machine eps for consistency between cuts 
+for (i in 1:length(eps_values)) { 
+  cut_cl <- cut_tree(cl$hc, eps_values[i], core_dist)
+  dbscan_cl <- dbscan(authors_tsne, eps = eps_values[i], minPts = 5, borderPoints = F) # DBSCAN* doesn't include border points
+
+  ## Use run length encoding as an ID-independent way to check ordering
+  check[i] <- (all.equal(rle(cut_cl)$lengths, rle(dbscan_cl$cluster)$lengths) == "TRUE")
+}
+print(all(check == T))
+```
+
+```{r}
+ plot(cl)
+```
+
+```{r}
+
+```
+
