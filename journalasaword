@@ -4,7 +4,7 @@ author: "Suschevskiy Vsevolod"
 date: "5/2/2020"
 output: html_document
 editor_options: 
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
 
 ```{r}
@@ -834,6 +834,8 @@ plan(multiprocess)
 many_models_extra <- data_frame(K = c(10, 15, 20, 25, 30, 35, 40, 60)) %>%
   mutate(topic_model = future_map(K, ~stm(journals_sparse_extra, K = .,
                                           verbose = FALSE)))
+
+?stm
 ```
 
 ```{r}
@@ -1008,7 +1010,7 @@ gamma_terms_extra %>%
 
 ```{r}
 gamma_terms_extra %>%
-  select(topic, gamma, terms) %>%
+  select(topic, gamma, terms) %>% kable()
   knitr::kable(digits = 3, format = "latex", caption = "all the topics, ordered by prevalence",
         col.names = c("Topic", "Expected topic proportion", "Top 7 terms"))
 ```
@@ -1070,7 +1072,78 @@ p%>% layout(showlegend = FALSE)
 ```
 
 
-### By authors
+### TSNE by JASSS article
+
+
+```{r}
+td_gamma_extra
+
+td_gamma_extra %>% 
+  mutate(document = document %>% str_remove_all("DOI: ")) %>% 
+  left_join(CitNet_clusters %>% mutate(doi = doi %>% as.character), by = c("document"= "doi")) %>% 
+  na.omit() %>% 
+  pivot_wider(names_from = topic, values_from = gamma) %>% select(-document) -> articles_gamma
+```
+
+```{r}
+train = articles_gamma
+## Curating the database for analysis with both t-SNE and PCA
+Labels<-train$title
+train$label<-as.factor(Labels)
+## for plotting
+colors = rainbow(length(unique(train$label)))
+names(colors) = unique(train$label)
+
+## Executing the algorithm on curated data
+tsne <- Rtsne(train[,-1:-2], dims = 3, perplexity=10, verbose=TRUE, max_iter = 1000, pca = F)
+# exeTimeTsne<- system.time(Rtsne(train[,-1], dims = 3, perplexity=30, verbose=TRUE, max_iter = 500, pca =F))
+
+## Plotting
+plot(tsne$Y, t='n', main="tsne")
+text(tsne$Y, labels=train$label, col=colors[train$label])
+
+?Rtsne
+```
+
+```{r}
+library(plotly)
+
+
+p <- plot_ly(x = tsne$Y[,1], 
+             y = tsne$Y[,2], 
+             z = tsne$Y[,3],
+             color = as.factor(train$cluster), 
+             size = 10, text = Labels)
+p
+# p%>% layout(showlegend = FALSE)
+```
+
+### CitNet distribution in clusters
+
+
+```{r}
+save(articles_gamma, file = "article_gamme.RData")
+
+articles_gamma %>% group_by(cluster) %>% count()
+
+articles_gamma %>% 
+  pivot_longer(-c(cluster, title), names_to = "topic", values_to = "gamma") %>% 
+  mutate(topic = topic %>% as.numeric()) %>% 
+  group_by(cluster, title) %>% 
+  group_modify(function(.x,.y){.x %>% 
+      arrange(desc(gamma)) %>% head(n=1)
+    }) %>% 
+  group_by(cluster, topic) %>% 
+  summarise(n=n()) %>% 
+  arrange(cluster, desc(n)) %>% 
+  left_join(gamma_terms_extra %>% select(topic, terms) %>% mutate(topic = topic %>% as.character() %>% str_remove_all("Topic ") %>% as.numeric())) %>% filter(cluster == 3) %>% select(-n, -cluster) %>% top_n(5) %>% kable()
+
+gamma_terms_extra %>%
+  select(topic, gamma, terms)
+```
+
+
+### By single author
 
 ```{r}
 journals_c
@@ -1094,7 +1167,7 @@ library(stm)
 library(furrr)
 plan(multiprocess)
 
-many_models_authors <- data_frame(K = c(10, 15, 20, 25, 30, 35, 40, 60)) %>%
+many_models_authors <- data_frame(K = c(20)) %>%
   mutate(topic_model = future_map(K, ~stm(journals_sparse_authors, K = .,
                                           verbose = FALSE)))
 ```
@@ -1207,9 +1280,13 @@ ggplot(aes(topic, gamma, label = terms, fill = topic)) +
 
 ```{r}
 gamma_terms_author %>%
-  top_n(20, gamma) %>%
+  top_n(40, gamma) %>%
 knitr::kable()
 ```
+
+
+
+
 
 ### T-SNE by word (Author)
 
@@ -1255,7 +1332,7 @@ p <- plot_ly(x = tsne$Y[,1],
              color = c(rep("Not flaminio squazzoni", 33), "flaminio squazzoni", rep("Not flaminio squazzoni", 556)) %>% as.factor,#train$term, 
              colors = c('#d62728','#1f77b4'),
              size = 10, text = Labels)
-p
+#p
 
 p%>% layout(showlegend = FALSE)
 ```
@@ -1268,7 +1345,8 @@ tidy_journals_c %>%
   group_by(AuN) %>% 
   count(word) %>% 
   arrange(-n) %>% 
-  filter(AuN == "flaminio squazzoni")
+  filter(AuN == "nigel gilbert") %>% 
+  select(-n) %>% kable()
 ```
 
 ```{r}
@@ -1312,7 +1390,7 @@ colors = rainbow(length(unique(train$label)))
 names(colors) = unique(train$label)
 
 ## Executing the algorithm on curated data
-tsne <- Rtsne(train[,-1], dims = 2, perplexity=10, verbose=TRUE, max_iter = 1000, pca = F)
+tsne <- Rtsne(train[,-1], dims = 3, perplexity=10, verbose=TRUE, max_iter = 1000, pca = F)
 # exeTimeTsne<- system.time(Rtsne(train[,-1], dims = 3, perplexity=30, verbose=TRUE, max_iter = 500, pca =F))
 
 ## Plotting
@@ -1326,7 +1404,7 @@ library(plotly)
 
 p <- plot_ly(x = tsne$Y[,1], 
              y = tsne$Y[,2], 
-             # z = tsne$Y[,3],
+             z = tsne$Y[,3],
              # color = train$term, 
              size = 10, text = Labels)
 
@@ -1334,7 +1412,10 @@ p%>% layout(showlegend = FALSE)
 ```
 
 
-### k-mean
+
+
+
+### k-mean by author
 
 ```{r}
 library(factoextra)
@@ -1393,7 +1474,76 @@ print(all(check == T))
  plot(cl)
 ```
 
-```{r}
+### TOPIC TRASHOLD
 
+```{r}
+td_gamma_author %>% 
+  filter(gamma > 0.1) %>% 
+  ggplot(aes(gamma))+
+  geom_density()
+
+
+td_gamma_author %>% 
+  filter(gamma > 0.3) %>% 
+  group_by(document) %>% 
+  summarise(n = n()) %>% 
+  ggplot(aes(n))+
+  geom_bar(aes(y = (..count..)/sum(..count..))) + 
+          scale_y_continuous(labels=scales::percent) +
+  ggtitle("Amount of topics for authors", subtitle = "threshold 0.3 gamma")
 ```
+
+
+```{r}
+td_gamma_extra %>% 
+  filter(gamma > 0.1) %>% 
+  ggplot(aes(gamma))+
+  geom_density()
+
+
+td_gamma_extra %>% 
+  filter(gamma > 0.2) %>% 
+  group_by(document) %>% 
+  summarise(n = n()) %>% 
+  ggplot(aes(n))+
+  geom_bar()
+```
+
+```{r}
+gamma_terms_author %>% 
+    select(topic, terms) %>% 
+    mutate(topic = topic %>% as.character() %>% str_remove_all("Topic ") %>% as.numeric())
+
+td_gamma_author %>% 
+  group_by(document) %>% 
+  filter(gamma == max(gamma)) %>% 
+  left_join(gamma_terms_author %>% 
+    select(topic, terms) %>% 
+    mutate(topic = topic %>% as.character() %>% str_remove_all("Topic ") %>% as.numeric()), by = "topic") %>% 
+  group_by(topic, terms) %>% 
+  summarise(count = n()) %>%  arrange(-count) %>%  kable()  #%>% 
+  ggplot(aes(as.factor(topic), count))+
+   geom_bar(stat="identity", position="identity")+
+  geom_text(aes(label = terms))+
+  ggtitle("Destriburion of topics", subtitle = "threshold 0.3 gamma")+
+  coord_flip()
+```
+
+```{r}
+top_topics = c(18, 1, 16, 6, 9, 4)
+
+i = 6
+td_beta_author %>% 
+  filter(topic %in% top_topics) %>% 
+  group_by(topic) %>% 
+  filter(beta >= 0.01) %>% 
+  arrange(-beta) %>% 
+  filter(topic == i) %>% 
+  kable()
+```
+
+```{r}
+journals %>% 
+```
+
 
