@@ -1,0 +1,808 @@
+---
+title: "final"
+author: "Suschevskiy Vsevolod"
+date: "5/16/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyverse)
+
+library(mallet)
+library(stopwords)
+library(readr)
+library(stringr)
+library(tidytext)
+#write_lines(stopwords("en"), "stopwords.txt")
+
+
+library(ggplot2)
+library(purrr)
+library(tidyr)
+library(scales)
+library(kableExtra)
+
+library(Rtsne)
+library(plotly)
+
+library(ineq)
+
+library(widyr)
+
+library(igraph)
+library(ggraph)
+library(linkcomm)
+```
+
+```{r}
+load(file = "diploma/api_publications_MAX.RData")
+```
+
+### Journal names to lower
+
+```{r}
+bad_journals = c("한국정보과학회 학술발표논문집", "Επιθεώρηση Κοινωνικών Ερευνών",
+                 "Социально-экономические явления и процессы", "創価経済論集", "日本社会情報学会学会誌", "(2005)", "(2016), doi:10.1594/WDCC/CHELSA_v1_1", "1/2015", "10-107/1", "11-109/3", 1:100, "177", "Journal of Artificial Societies and Social Simulation")
+
+
+api_publications_journals_MAX %>% 
+  unique()%>% 
+  select(AuId, Journal_name, DOI) %>% 
+  filter(!Journal_name %in% bad_journals) %>% 
+  na.omit() %>% 
+  mutate(Journal_name_shrink = Journal_name %>% tolower() %>% str_replace_all("-", "") %>% str_replace_all("[^[:alnum:]]", " ") %>% str_replace_all("[[:digit:]]", " ") %>% trimws() %>% str_replace_all(" ", "")) %>% 
+  na.omit() -> journals
+
+
+journals %>% group_by(AuId) %>% summarise(all_journals = paste(Journal_name_shrink, collapse = " ")) -> journals_c
+
+journals %>% 
+  left_join(jasss_authors_api_max %>% select(AuId, doi)) %>% 
+  select(-AuId) %>% 
+  group_by(doi) %>% 
+  summarise(all_journals = paste(Journal_name_shrink, collapse = " ")) -> journals_c_by_doi
+```
+
+### STM Preproccess
+
+
+```{r}
+journals_c %>%
+  unnest_tokens(word, all_journals, token = "words") %>%
+  add_count(word) %>%
+  filter(n > 10) %>%
+  select(-n) -> tidy_journals_c
+
+
+tidy_journals_c %>% select(word) %>% unique()
+
+
+journals_sparse <- tidy_journals_c %>%
+  count(AuId, word) %>%
+  cast_sparse(AuId, word, n)
+```
+
+## STM
+
+```{r}
+library(stm)
+library(furrr)
+plan(multiprocess)
+
+many_models_authors <- data_frame(K = c(10, 20, 30, 40, 50, 60)) %>%
+  mutate(topic_model = future_map(K, ~stm(journals_sparse, K = .,
+                                          verbose = FALSE)))
+```
+
+```{r}
+heldout_authors <- make.heldout(journals_sparse)
+
+k_result_authors <- many_models_authors %>%
+  mutate(exclusivity = map(topic_model, exclusivity),
+         semantic_coherence = map(topic_model, semanticCoherence, journals_sparse),
+         eval_heldout = map(topic_model, eval.heldout, heldout_authors$missing),
+         residual = map(topic_model, checkResiduals, journals_sparse),
+         bound =  map_dbl(topic_model, function(x) max(x$convergence$bound)),
+         lfact = map_dbl(topic_model, function(x) lfactorial(x$settings$dim$K)),
+         lbound = bound + lfact,
+         iterations = map_dbl(topic_model, function(x) length(x$convergence$bound)))
+
+
+k_result_authors %>%
+  transmute(K,
+            `Lower bound` = lbound,
+            Residuals = map_dbl(residual, "dispersion"),
+            `Semantic coherence` = map_dbl(semantic_coherence, mean),
+            `Held-out likelihood` = map_dbl(eval_heldout, "expected.heldout")) %>%
+  gather(Metric, Value, -K) %>%
+  ggplot(aes(K, Value, color = Metric)) +
+  geom_line(size = 2.5, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(x = "K (number of topics)",
+       y = NULL,
+       title = "Model diagnostics by number of topics",
+       subtitle = "These diagnostics indicate that a good number of topics would be around 25")+
+  theme_minimal()
+```
+
+```{r}
+topic_model_author <- k_result_authors %>% 
+  filter(K == 30) %>% 
+  pull(topic_model) %>% 
+  .[[1]]
+
+topic_model_author
+```
+
+
+```{r}
+stm_vocab_author = topic_model_author$vocab
+stm_vocab_author %>% 
+  as_tibble() %>% 
+  rename(Journal_name_shrink = value) %>% 
+   group_by(Journal_name_shrink) %>% 
+  mutate(id_row = row_number()) %>%
+  dplyr::left_join(journals %>% select(-AuId, -DOI) %>% unique() %>% group_by(Journal_name_shrink) %>% mutate(id_row = row_number()), by = c("Journal_name_shrink" ,"id_row")) %>%
+  select(-id_row) -> stm_vocab_author_2
+
+stm_vocab_author_2 = as.character(stm_vocab_author_2$Journal_name)
+
+
+topic_model_author$vocab = stm_vocab_author_2
+```
+
+
+```{r}
+td_beta_author <- tidy(topic_model_author)
+
+td_beta_author %>%head() 
+```
+
+```{r}
+
+td_gamma_author <- tidy(topic_model_author, matrix = "gamma",
+                 document_names = rownames(journals_sparse))
+
+td_gamma_author %>% head(10)
+```
+
+```{r}
+top_terms_author <- td_beta_author %>%
+  arrange(beta) %>%
+  group_by(topic) %>%
+  top_n(7, beta) %>%
+  arrange(-beta) %>%
+  select(topic, term) %>%
+  summarise(terms = list(term)) %>%
+  mutate(terms = map(terms, paste, collapse = ", ")) %>% 
+  unnest(cols = c(terms))
+
+gamma_terms_author <- td_gamma_author %>%
+  group_by(topic) %>%
+  summarise(gamma = mean(gamma)) %>%
+  arrange(desc(gamma)) %>%
+  left_join(top_terms_author, by = "topic") %>%
+  mutate(topic = paste0("Topic ", topic),
+         topic = reorder(topic, gamma))
+
+gamma_terms_author %>%
+  top_n(30, gamma) %>%
+knitr::kable()# %>% 
+# ggplot(aes(topic, gamma, label = terms, fill = topic)) +
+#   geom_col(show.legend = FALSE, fill = "white", color = "black") +
+#   geom_text(hjust = 0, nudge_y = 0.0005,  size = 3,
+#             family = "IBMPlexSans") +
+#   coord_flip() +
+#   scale_y_continuous(expand = c(0,0),
+#                      limits = c(0, 0.09),
+#                      labels = percent_format()) +
+#   theme(plot.title = element_text(size = 16,
+#                                   family="IBMPlexSans-Bold"),
+#         plot.subtitle = element_text(size = 13)) +
+#   labs(x = NULL, y = expression(gamma),
+#        title = "Top 20 topics by prevalence among JASSS authors' journals",
+#        subtitle = "With the top journals that contribute to each topic")
+```
+
+# t-SNE
+
+## By journal
+
+```{r}
+# topic_model_author <- k_result_authors %>% 
+#   filter(K == 30) %>% 
+#   pull(topic_model) %>% 
+#   .[[1]]
+# 
+# td_beta_author <- tidy(topic_model_author)
+
+td_beta_author %>% 
+  unique() %>% 
+  tidyr::pivot_wider(names_from = topic, values_from = beta) -> journals_beta
+```
+
+#### 3d
+
+```{r}
+
+train = journals_beta
+## Curating the database for analysis with both t-SNE and PCA
+Labels<-train$term
+train$label<-as.factor(Labels)
+## for plotting
+colors = rainbow(length(unique(train$label)))
+names(colors) = unique(train$label)
+
+## Executing the algorithm on curated data
+tsne <- Rtsne(train[,-1], dims = 3, perplexity=10, verbose=TRUE, max_iter = 1000, pca = F)
+# exeTimeTsne<- system.time(Rtsne(train[,-1], dims = 3, perplexity=30, verbose=TRUE, max_iter = 500, pca =F))
+
+## Plotting
+plot(tsne$Y, t='n', main="tsne")
+text(tsne$Y, labels=train$label, col=colors[train$label])
+
+```
+
+```{r}
+p <- plot_ly(x = tsne$Y[,1], 
+             y = tsne$Y[,2], 
+             z = tsne$Y[,3],
+             color = train$term, size = 10, text = Labels)
+
+p%>% layout(showlegend = FALSE)
+```
+
+#### 2d
+
+```{r}
+tsne2 <- Rtsne(train[,-1], dims = 2, perplexity=40, verbose=TRUE, max_iter = 1000, pca = F)
+
+p <- plot_ly(x = tsne2$Y[,1], 
+             y = tsne2$Y[,2], 
+             color = train$term, size = 10, text = #Labels
+               stm_vocab_author_2
+             )
+
+p%>% layout(showlegend = FALSE)
+```
+
+
+## By Authors
+
+```{r}
+td_gamma_author %>% 
+  mutate(document = document %>% as.numeric()) %>%
+  left_join(jasss_authors_api_max %>%
+              select(AuN, AuId) %>%
+              unique(), by = c("document"= "AuId")) %>%
+  pivot_wider(names_from = topic, values_from = gamma) -> authors_gamma
+```
+
+```{r}
+train = authors_gamma
+## Curating the database for analysis with both t-SNE and PCA
+Labels<-train$document
+train$label<-as.factor(Labels)
+## for plotting
+colors = rainbow(length(unique(train$label)))
+names(colors) = unique(train$label)
+
+## Executing the algorithm on curated data
+tsneA <- Rtsne(train[,-1:-2], dims = 2, perplexity=10, verbose=TRUE, max_iter = 1000, pca = F)
+# exeTimeTsne<- system.time(Rtsne(train[,-1], dims = 3, perplexity=30, verbose=TRUE, max_iter = 500, pca =F))
+
+## Plotting
+plot(tsneA$Y, t='n', main="tsne")
+text(tsneA$Y, labels=train$label, col=colors[train$label])
+```
+
+```{r}
+match(c("290577071"),Labels)
+
+p <- plot_ly(x = tsneA$Y[,1], 
+             y = tsneA$Y[,2], 
+             # z = tsne$Y[,3],
+             color = c(rep("Not flaminio squazzoni", 57), "flaminio squazzoni", rep("Not flaminio squazzoni", 846)) %>% as.factor,#train$term, 
+             colors = c('#d62728','#1f77b4'),
+             size = 10, text = authors_gamma$AuN)
+#p
+
+p%>% layout(showlegend = FALSE)
+```
+
+## tables and probabilities
+
+
+### TOPIC TRASHOLD
+
+```{r}
+td_gamma_author %>% 
+  filter(gamma > 0.1) %>% 
+  ggplot(aes(gamma))+
+  geom_density()
+
+
+td_gamma_author %>% 
+  filter(gamma > 0.3) %>% 
+  group_by(document) %>% 
+  summarise(n = n()) %>% 
+  ggplot(aes(n))+
+  geom_bar(aes(y = (..count..)/sum(..count..))) + 
+          scale_y_continuous(labels=scales::percent) +
+  ggtitle("Amount of topics for authors", subtitle = "threshold 0.3 gamma")
+```
+
+
+
+```{r}
+gamma_terms_author %>% 
+    select(topic, terms) %>% 
+    mutate(topic = topic %>% as.character() %>% str_remove_all("Topic ") %>% as.numeric())
+
+td_gamma_author %>% 
+  group_by(document) %>% 
+  filter(gamma == max(gamma)) %>% 
+  left_join(gamma_terms_author %>% 
+    select(topic, terms) %>% 
+    mutate(topic = topic %>% as.character() %>% str_remove_all("Topic ") %>% as.numeric()), by = "topic") %>% 
+  group_by(topic, terms) %>% 
+  summarise(count = n()) %>%  arrange(-count) -df %>%  kable()#  #%>% 
+  ggplot(aes(as.factor(topic), count))+
+   geom_bar(stat="identity", position="identity")+
+  geom_text(aes(label = terms))+
+  ggtitle("Destriburion of topics", subtitle = "threshold 0.3 gamma")+
+  coord_flip()
+```
+
+```{r}
+top_topics = c(26, 19, 16, 11, 27, 4)
+
+  i = 26
+td_beta_author %>% 
+  # filter(topic %in% top_topics) %>% 
+  group_by(topic) %>% 
+  filter(beta >= 0.01) %>% 
+  arrange(-beta) %>% 
+  filter(topic == i) %>%  kable()#
+  ungroup() %>% 
+  select(term) %>% as.vector() ->vect.journ
+```
+
+### gin
+
+
+```{r}
+td_gamma_author %>% 
+  # group_by(document) %>% 
+  # filter(gamma == max(gamma)) %>% 
+  # ungroup() %>% 
+  mutate(document = document %>% as.numeric()) %>% 
+  left_join(jasss_authors_api_max %>% select(AuId, doi), by = c("document" ="AuId")) %>% 
+  group_by(doi, topic) %>% 
+  summarise(gamma = sum(gamma), n_of_authors = n()) %>% 
+  group_by(doi, n_of_authors) %>% 
+  summarise(gini=ineq(gamma)) %>% 
+  filter(n_of_authors > 1) %>% 
+  arrange(-gini) %>% 
+  tail(10) %>% 
+  kable()
+```
+
+```{r}
+td_gamma_author %>% 
+  # group_by(document) %>% 
+  # filter(gamma == max(gamma)) %>% 
+  # ungroup() %>% 
+  mutate(document = document %>% as.numeric()) %>% 
+  left_join(jasss_authors_api_max %>% select(AuId, doi), by = c("document" ="AuId")) %>% 
+  group_by(doi, topic) %>% 
+  summarise(gamma = sum(gamma)) %>% 
+  filter(doi == "DOI: 10.18564/jasss.3819") %>% 
+  ggplot(aes(as.factor(topic), gamma))+
+  geom_bar(stat = "identity")+
+  ggtitle(label = "The Insurance Industry as a Complex Social System: Competition, Cycles and Crises", subtitle = "3 authors, GI = 0.573")+
+  theme_minimal()
+```
+
+```{r}
+td_gamma_author %>% 
+  # group_by(document) %>% 
+  # filter(gamma == max(gamma)) %>% 
+  # ungroup() %>% 
+  mutate(document = document %>% as.numeric()) %>% 
+  left_join(jasss_authors_api_max %>% select(AuId, doi), by = c("document" ="AuId")) %>% 
+  group_by(doi, topic) %>% 
+  summarise(gamma = sum(gamma)) %>% 
+  filter(doi == "DOI: 10.18564/jasss.1609") %>% 
+  ggplot(aes(as.factor(topic), gamma))+
+  geom_bar(stat = "identity")+
+  ggtitle(label = "Analysing Differential School Effectiveness Through Multilevel and Agent-Based Modelling", subtitle=  " Mauricio Salgadoa, Elio Marchioneb and Nigel Gilbert GI = 0.93")+
+  theme_minimal()
+```
+
+### item by topic
+
+```{r}
+td_gamma_author %>% 
+  # group_by(document) %>% 
+  # filter(gamma == max(gamma)) %>% 
+  # ungroup() %>% 
+  mutate(document = document %>% as.numeric()) %>% 
+  left_join(jasss_authors_api_max %>% select(AuId, doi), by = c("document" ="AuId")) %>% 
+  select(doi) %>% unique() ->doi_stm_model_max
+
+
+td_gamma_author %>% 
+  # group_by(document) %>% 
+  # filter(gamma == max(gamma)) %>% 
+  # ungroup() %>% 
+  mutate(document = document %>% as.numeric()) %>% 
+  left_join(jasss_authors_api_max %>% select(AuId, doi), by = c("document" ="AuId")) %>% 
+  group_by(document, doi) %>% 
+  filter(gamma == max(gamma)) %>% 
+  filter(topic == 6)
+  
+
+	6
+```
+
+```{r}
+td_gamma_author %>% 
+  filter(document == 1530208739) %>% 
+  filter(gamma> 0.05) %>% 
+  arrange(-gamma)
+```
+
+## References
+
+
+```{r}
+jasss_trash_headings = c("© Copyright JASSS 2020", "✔", "	 © Copyright JASSS 2020 ")
+
+jasss_texts %>% 
+  mutate(value = str_replace_all(value, "\r", " ") %>% str_replace_all("\n", "")) %>% 
+  mutate(is_heading = str_replace_all(is_heading, "\r", " ") %>%
+           str_replace_all("\n", "") %>% 
+           str_replace_all("\t", "") %>% 
+           trimws()) %>% 
+    mutate(name = str_replace_all(name, "\r", " ") %>%
+           str_replace_all("\n", "") %>% 
+           str_replace_all("\t", "") %>% 
+             trimws()) %>% 
+  filter(!value %in% jasss_trash_headings) %>% 
+  filter(!str_detect(value, "Home > "))  %>% 
+    filter(!str_detect(value, "Javascript is disabled in your browser.") &
+             #!str_detect(value, "Journal of Artificial Societies and Social Simulation .+") &
+                           !str_detect(value, "Received: .+") &
+             !str_detect(value, " JASSSFrom Google")& 
+             !str_detect(value, "Copyright JASSS")) %>% 
+  group_by(name, author, doi) %>% 
+  tidyr::fill(is_heading, .direction="down") %>%
+  filter(!is.na(doi)) %>% 
+  na.omit() %>% 
+  ungroup() %>% 
+  mutate(is_heading = is_heading %>% str_to_lower()) %>% 
+  filter(doi != "if doi") %>% 
+  filter(is_heading == "references") %>% 
+  filter(value != "References" & value != "  " & value !=  " " & value != "© Copyright JASSS") %>%
+  filter(nchar(value) > 20) -> jasss_texts_references
+
+remove(jasss_trash_headings)
+```
+### Key Citation from CitNet Open Coding
+
+
+```{r}
+library(readr)
+citations_quotes <- read_csv("citations JASSS open coding - quotes .csv")
+
+citations_quotes$Reference = str_replace_all(citations_quotes$Reference, "á", "a")
+
+citations_quotes %>% 
+  select(Cluster,Reference) %>% 
+  unique() %>% 
+  mutate(name = str_extract(Reference, "\\w*"),
+         year = str_extract(Reference, "(\\d)+"),
+         id = paste0(name %>% tolower,year)
+         )->citations_NY
+
+
+citations_NY
+```
+
+### Top cited CitNet
+
+
+```{r}
+CitNet_data %>% 
+  select(authors, year, cit_score) %>% 
+  arrange(-cit_score) %>% 
+  mutate(name = authors %>% str_extract("\\w*"),
+         id = paste0(name %>% tolower(), year)) %>% 
+  filter( cit_score>=6 ) ->citations_NY2
+```
+
+
+### Find Citations
+
+
+```{r}
+
+# key_citations = citations_NY
+key_citations = citations_NY2
+
+
+jasss_texts_citations = jasss_texts_references %>% mutate(value = value %>% str_replace_all("Á", "A"))
+
+for (i in 1:nrow(key_citations)) {
+ jasss_texts_citations %>% 
+  mutate(!!paste0(key_citations$name[i], key_citations$year[i]) := 
+           str_count(value, pattern = paste0(key_citations$name[i] %>% 
+                                               toupper(), '(.*?)', 
+                                             key_citations$year[i])))-> 
+    jasss_texts_citations
+}
+```
+
+```{r}
+jasss_texts_citations %>% 
+  select(-value, - name, -author, -url, -is_heading) %>% 
+  pivot_longer(cols = 2:90
+               ,names_to = "reference") ->jasss_texts_citations_long
+
+
+jasss_texts_citations_long %>% 
+  filter(value > 0) %>% 
+  group_by(doi) %>% 
+  summarise(references = paste(reference,collapse = " ")) ->jasss_texts_citations_c
+```
+
+### Word co-ocurrences and correlations
+
+https://www.tidytextmining.com/nasa.html#word-co-ocurrences-and-correlations
+
+```{r}
+jasss_texts_citations_c <- jasss_texts_citations_c %>% 
+  unnest_tokens(word, references)
+
+
+jasss_texts_citations_c %>%
+  count(word, sort = TRUE)
+
+
+title_word_pairs <- jasss_texts_citations_c %>% 
+  pairwise_count(word, doi, sort = TRUE, upper = FALSE)
+
+title_word_pairs
+```
+
+```{r}
+title_word_pairs %>%
+  filter(n >= 1) %>%
+  graph_from_data_frame()->g
+
+V(g)$name %>% 
+  as_tibble() %>% 
+  group_by(value) %>% 
+  mutate(id_row = row_number()) %>%
+  left_join(key_citations %>% 
+              group_by(id) %>% 
+              mutate(id_row = row_number()), by = c("value" = "id", "id_row"))  %>% 
+  ungroup() %>% 
+  select(Cluster) %>% 
+  pull() -> V(g)$cluster
+
+g %>% 
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_node_point(size = 5
+                  # , aes(color = cluster)
+                  ) +
+  geom_node_text(aes(label = name), repel = TRUE, 
+                 point.padding = unit(0.2, "lines")) +
+  theme_void()
+```
+
+### cenrality
+
+```{r}
+betweenness(g) %>% 
+  as_tibble()%>% 
+  bind_cols(V(g)$name %>% 
+  as_tibble()) %>% 
+  rename("betweenness" = "value") %>% 
+  arrange(-betweenness) %>% 
+  kable()
+```
+
+
+
+## RW
+
+```{r}
+
+  E(g)$weight = title_word_pairs$n/35
+
+cluster_walktrap(g, weight = E(g)$weight, steps = 6) ->rw
+
+V(g)$rw =  as.factor(membership(rw))
+
+
+g %>% 
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_node_point(size = 5, aes(color = as.factor(rw))) +
+  geom_node_text(aes(label = name), repel = TRUE, 
+                 point.padding = unit(0.2, "lines")) +
+  theme_void()+
+  ggtitle(label = "random walk, step = 6")
+```
+
+### TEXTS
+
+#### dictionary
+
+
+
+```{r}
+DS = c("probabilistic model*", "regression*", "machine learning", "data mining") %>% as_tibble()
+
+Rules = c("decision rule*", "if-then-rules", "decision tree*", 
+          "simple rule*", "fuzzy", "working memory", "WM", "ifelse", "decision rule*", "behavior rule*", "set of rules")%>% as_tibble()
+
+Networks = c("graph*", "social network*", "network representation", "network science", "node*", "edge*", "link*", "vertice", "random graph", "preferential attachment", "small-world", "centrality", "barabasi", "watts") %>% as_tibble()
+
+Theory = c("bounded rationality", "boundedly rational", "bias*", "planned behavior", "planned behaviour", "desire*", "belief*" ,"social norm*", "risk aversion", "prospects", "prospect theory", "utilit*", "payoff*", "game theory", "reward*", "bdi") %>% as_tibble()
+
+Compute = c("optimization", "minimization", "maximization", "optimiz*", "minimiz*", "maximiz*", "utilit*") %>% as_tibble()
+
+dictionary_max = tibble() %>% 
+  bind_rows(DS, Rules, Networks, Theory, Compute) %>% 
+  rename("word" = "value") %>% 
+  mutate(id = word %>% str_replace_all(" ", "")) %>% 
+  select(word) %>% 
+  t() %>% 
+  as.list()
+
+dictionary_max_names =tibble() %>% 
+  bind_rows(DS, Rules, Networks, Theory, Compute) %>% 
+  rename("word" = "value") %>% 
+  mutate(id = word %>% str_replace_all(" ", "")) %>% 
+  select(id)
+  
+
+
+dictionary_max = setNames(dictionary_max, dictionary_max_names$id)
+```
+
+```{r}
+corpus_max <- corpus(texts_modeling_max_c) 
+```
+
+
+```{r}
+kwic(corpus_max, pattern = phrase(paste(dictionary_max %>% .[[6]])), valuetype = "glob", window = 20)
+```
+
+
+
+
+```{r}
+dict_max <- dictionary(dictionary_max)
+
+
+dfm_max <- dfm(corpus_max, remove = append(stopwords("english"), c("agent", "figure", "also", "agents", "al", "et", "-", "+", "=", "one", "two", 1:200, letters, "research	goal")), stem = F, remove_punct = TRUE, dictionary = dict_max,)
+
+topfeatures(dfm_max, 20)
+```
+
+
+```{r}
+convert(dfm_max, to = "data.frame") -> dfm_max_df
+dfm_max_df$doc_id = texts_modeling_max_c$doi
+
+names(dfm_max_df) = names(dfm_max_df) %>% str_remove_all("-")
+```
+
+### convert to coocur terms
+
+```{r}
+# dfm_max_df
+
+dfm_max_df %>% 
+  pivot_longer(cols = 2:42
+               ,names_to = "words") %>% 
+  rename("doi" = "doc_id") -> texts_words_long
+
+
+texts_words_long %>% 
+  filter(value > 0) %>% 
+  group_by(doi) %>% 
+  summarise(words = paste(words,collapse = " ")) -> texts_words_long_c
+```
+
+```{r}
+texts_words_long_c
+
+texts_words_long_c <- texts_words_long_c %>% 
+  unnest_tokens(word, words)
+
+
+texts_words_long_c %>%
+  count(word, sort = TRUE)
+
+
+title_word_pairs <- texts_words_long_c %>% 
+  pairwise_count(word, doi, sort = TRUE, upper = FALSE)
+
+title_word_pairs
+```
+
+```{r}
+title_word_pairs %>%
+  filter(n >= 1) %>%
+  graph_from_data_frame() %>% 
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_node_point(size = 5
+                  # , aes(color = cluster)
+                  ) +
+  geom_node_text(aes(label = name), repel = TRUE, 
+                 point.padding = unit(0.2, "lines")) +
+  theme_void()
+```
+
+### TSNE by terms
+
+
+```{r}
+# dfm_max_df
+
+train = dfm_max_df
+## Curating the database for analysis with both t-SNE and PCA
+Labels<-texts_modeling_max_c$name
+train$label<-as.factor(Labels)
+## for plotting
+colors = rainbow(length(unique(train$label)))
+names(colors) = unique(train$label)
+
+## Executing the algorithm on curated data
+tsne_T <- Rtsne(train[,-1], dims = 3, perplexity=10, verbose=TRUE, max_iter = 1000, pca = F)
+# exeTimeTsne<- system.time(Rtsne(train[,-1], dims = 3, perplexity=30, verbose=TRUE, max_iter = 500, pca =F))
+
+## Plotting
+plot(tsne_T$Y, t='n', main="tsne")
+text(tsne_T$Y, labels=train$label, col=colors[train$label])
+
+```
+
+```{r}
+p <- plot_ly(x = tsne_T$Y[,1], 
+             y = tsne_T$Y[,2], 
+             z = tsne_T$Y[,3],
+             color = train$term, size = 10, text = Labels)
+
+p%>% layout(showlegend = FALSE)
+```
+
+```{r}
+tsne_T2 <- Rtsne(train[,-1], dims = 2, perplexity=40, verbose=TRUE, max_iter = 1000, pca = F)
+# exeTimeTsne<- system.time(Rtsne(train[,-1], dims = 3, perplexity=30, verbose=TRUE, max_iter = 500, pca =F))
+
+## Plotting
+plot(tsne_T2$Y, t='n', main="tsne")
+text(tsne_T2$Y, labels=train$label, col=colors[train$label])
+```
+
+```{r}
+p <- plot_ly(x = tsne_T2$Y[,1], 
+             y = tsne_T2$Y[,2], 
+             # z = tsne$Y[,3],
+             color = train$term, size = 10, text = Labels)
+
+p%>% layout(showlegend = FALSE)
+```
+
