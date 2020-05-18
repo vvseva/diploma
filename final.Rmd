@@ -712,29 +712,18 @@ kwr %>%
 
 ### dictionary
 
-dependense degree 
-social norm
-
-dependence-degree
-
-
-
-<!-- system dependance -->
-<!-- trading culture -->
-
-
 
 ```{r}
-DS = c("probabilistic model*", "regression*", "machine learning", "data mining", "standard deviation", "ttest", "probanilit*", "logistic", "gini", "ks*", "loss", "chi-square*", "z-score*", "sensitivity analysis*", "factorial design", "process model", "microsimulation", "time series") %>% as_tibble()
+DS = c("probabilistic model*", "regression*", "machine learning", "data mining", "probanilit*", "logistic", "gini", "loss", "sensitivity analysis*", "factorial design", "process model", "microsimulation", "time series") %>% as_tibble()
 
 Rules = c("decision rule*", "decision tree*", "decision process*",
           "simple rule*", "fuzzy", "working memory", "ifelse", "decision rule*", "behavior rule*", "set of rules", "dummy", "synthetic", "individual actor*", "dynamics model*", "emerg*")%>% as_tibble()
 
-Networks = c("network*", "social network*", "network representation", "network science", "node*", "edge*",  "vertice", "random network", "preferential attachment", "small-world", "centrality", "barabasi", "watts", "odd", "scale free", "network structure", "degree destribution", "peer effect*", "ba network", "small world network", "network topology") %>% as_tibble()
+Networks = c("social network*", "odd", "peer effect*") %>% as_tibble()
 
-Theory = c("bounded*", "bias*", "planned behav*", "satisficing", "desire*", "belief*" ,"social norm*", "risk aversion", "prospects", "prospect theory", "utilit*", "payoff*", "game theory", "reward*", "bdi", "hueristic*", "complex*", "cooperat*", "dilemma", "bounded rationalit*", "bounded confid*", "complex system*", "social system*", "social interaction*", "opinion dynamics", "conceptual model", "synthetic population", "opinion formation", "social impact", "multi-agent") %>% as_tibble()
+Theory = c("bounded*", "bias*", "planned behav*", "satisficing", "desire*", "belief*" ,"social norm*", "risk aversion", "prospect*", "payoff*", "game theory", "reward*", "bdi", "hueristic*", "complex*", "complexit*", "cooperat*", "dilemma", "bounded confid*", "complex system*", "social system*", "social interaction*", "opinion dynamics", "conceptual model", "synthetic population", "opinion formation", "social impact", "multi-agent", "social norm") %>% as_tibble()
 
-Compute = c("optimization", "minimization", "maximization", "optimiz*", "minimiz*", "maximiz*", "utilit*") %>% as_tibble()
+Compute = c("utilit*") %>% as_tibble()
 
 dictionary_max = tibble() %>% 
   bind_rows(DS, Rules, Networks, Theory, Compute) %>% 
@@ -753,6 +742,12 @@ dictionary_max_names =tibble() %>%
 
 
 dictionary_max = setNames(dictionary_max, dictionary_max_names$id)
+
+
+dictionary_max[["optimization"]] = c("optimization", "minimization", "maximization", "optimiz*", "minimiz*", "maximiz*")
+dictionary_max[["networks"]] = c("network*", "edge*", "node*", "centrality")
+dictionary_max[["barabasi"]] = c("barabasi", "scale free", "ba network", "random betwork", "preferential attachment")
+dictionary_max[["watts"]] = c("small world", "watts", "small-world")
 ```
 
 ```{r}
@@ -761,8 +756,9 @@ corpus_max <- corpus(texts_modeling_max_c)
 
 #### KWIC
 
+
 ```{r}
-kwic(corpus_max, pattern = phrase("dependence degree")
+kwic(corpus_max, pattern = phrase("degree dependence*")
        # phrase(paste(dictionary_max %>% .[[6]] ))
      , valuetype = "glob", window = 10) %>% 
   kable()
@@ -785,6 +781,8 @@ topfeatures(dfm_max, 20)
 convert(dfm_max, to = "data.frame") -> dfm_max_df
 dfm_max_df$doc_id = texts_modeling_max_c$doi
 
+dfm_max_df %>% filter(`complexit*` > 0)
+
 names(dfm_max_df) = names(dfm_max_df) %>% str_remove_all("-")
 ```
 
@@ -798,7 +796,7 @@ dfm_max_df %>%
                ,names_to = "words") %>% 
   rename("doi" = "doc_id") -> texts_words_long
 
-texts_words_long$words
+# texts_words_long$words
 
 
 texts_words_long %>% 
@@ -821,12 +819,12 @@ words_long_c %>%
 title_word_pairs <- words_long_c %>% 
   pairwise_count(word, doi, sort = TRUE, upper = FALSE)
 
-title_word_pairs %>% kable()
+title_word_pairs %>% head(60) %>% kable()
 ```
 
 ```{r}
 title_word_pairs %>%
-  filter(n >= 1) %>%
+  filter(n >= 2) %>%
   graph_from_data_frame() %>% 
   ggraph(layout = "fr") +
   geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
@@ -837,18 +835,6 @@ title_word_pairs %>%
                  point.padding = unit(0.2, "lines")) +
   theme_void()
 
-
-title_word_pairs %>%
-  filter(n >= 2) %>%
-  graph_from_data_frame() %>% 
-  ggraph(layout = "circlepack") +
-  geom_edge_link(alpha = 0.5, color = "cyan4") +
-  geom_node_point(size = 5, alpha = 0.5
-                  # , aes(color = cluster)
-                  ) +
-  geom_node_text(aes(label = name), repel = TRUE, 
-                 point.padding = unit(0.2, "lines")) +
-  theme_void()
 ```
 
 ### TSNE by terms
@@ -885,7 +871,7 @@ p%>% layout(showlegend = FALSE)
 ```
 
 ```{r}
-tsne_T2 <- Rtsne(train[,-1], dims = 2, perplexity=40, verbose=TRUE, max_iter = 1000, pca = F)
+tsne_T2 <- Rtsne(train[,-1], dims = 2, perplexity=10, verbose=TRUE, max_iter = 1000, pca = F)
 # exeTimeTsne<- system.time(Rtsne(train[,-1], dims = 3, perplexity=30, verbose=TRUE, max_iter = 500, pca =F))
 
 ## Plotting
@@ -899,5 +885,119 @@ p <- plot_ly(x = tsne_T2$Y[,1],
              color = train$term, size = 10, text = Labels)
 
 p%>% layout(showlegend = FALSE)
+```
+
+### TSNE by terms FLIPPED
+
+
+```{r}
+# dfm_max_df
+dfm_max_df_t = (dfm_max_df)
+row.names(dfm_max_df_t) = dfm_max_df_t$doc_id
+dfm_max_df_t = dfm_max_df_t %>% select(-doc_id)
+
+train = t(dfm_max_df_t) %>% as_tibble()
+## Curating the database for analysis with both t-SNE and PCA
+Labels<-names(dfm_max_df_t)
+train$label<-as.factor(Labels)
+## for plotting
+colors = rainbow(length(unique(train$label)))
+names(colors) = unique(train$label)
+
+## Executing the algorithm on curated data
+tsne_terms <- Rtsne(train[,-1], dims = 3, perplexity=10, verbose=TRUE, max_iter = 1000, pca = F)
+# exeTimeTsne<- system.time(Rtsne(train[,-1], dims = 3, perplexity=30, verbose=TRUE, max_iter = 500, pca =F))
+
+## Plotting
+plot(tsne_terms$Y, t='n', main="tsne")
+text(tsne_terms$Y, labels=train$label, col=colors[train$label])
+
+```
+
+```{r}
+p <- plot_ly(x = tsne_terms$Y[,1], 
+             y = tsne_terms$Y[,2], 
+             z = tsne_terms$Y[,3],
+             color = train$term, size = 10, text = Labels)
+
+p%>% layout(showlegend = FALSE)
+```
+
+```{r}
+tsne_terms2 <- Rtsne(train[,-1], dims = 2, perplexity=10, verbose=TRUE, max_iter = 1000, pca = F)
+# exeTimeTsne<- system.time(Rtsne(train[,-1], dims = 3, perplexity=30, verbose=TRUE, max_iter = 500, pca =F))
+
+## Plotting
+plot(tsne_terms2$Y, t='n', main="tsne")
+text(tsne_terms2$Y, labels=train$label, col=colors[train$label])
+```
+
+```{r}
+p <- plot_ly(x = tsne_terms2$Y[,1], 
+             y = tsne_terms2
+             $Y[,2], 
+             color = train$term, size = 10, text = Labels)
+
+p%>% layout(showlegend = FALSE)
+```
+
+```{r}
+td_gamma_author %>% 
+  mutate(document = document %>% as.numeric()) %>% 
+  left_join(jasss_authors_api_max %>% select(AuId, doi), by = c("document" ="AuId")) %>% 
+  group_by(doi) %>% 
+  filter(gamma == max(gamma)) -> stm_topic_doi
+```
+
+```{r}
+
+topic_to_look = 18
+
+words_long_c %>% 
+  filter(doi %in% (stm_topic_doi %>% filter(topic == topic_to_look) %>% select(doi) %>% pull()) ) %>% select(doi) %>% unique() %>% count()
+
+
+
+words_long_c %>% 
+  filter(doi %in% (stm_topic_doi %>% 
+                     filter(topic == topic_to_look) %>% 
+                     select(doi) %>% 
+                     pull()) ) %>% 
+  pairwise_count(word, doi, sort = TRUE, upper = FALSE) %>% 
+  filter(n >= 2) %>%
+  graph_from_data_frame() %>% 
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_node_point(size = 5
+                  # , aes(color = cluster)
+                  ) +
+  geom_node_text(aes(label = name), repel = TRUE, 
+                 point.padding = unit(0.2, "lines")) +
+  theme_void()+
+  ggtitle(label = paste("Selected words for topic", topic_to_look))
+
+```
+
+```{r}
+topic_to_look = 6
+
+words_long_c %>% 
+  filter(doi %in% (stm_topic_doi %>% filter(topic == topic_to_look) %>% select(doi) %>% pull()) ) %>% select(doi) %>% unique() %>% count()
+
+
+words_long_c %>% 
+  filter(doi %in% (stm_topic_doi %>% filter(topic == topic_to_look) %>% select(doi) %>% pull()) ) %>% 
+  pairwise_count(word, doi, sort = TRUE, upper = FALSE) %>% 
+  filter(n >= 2) %>%
+  graph_from_data_frame() %>% 
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_node_point(size = 5
+                  # , aes(color = cluster)
+                  ) +
+  geom_node_text(aes(label = name), repel = TRUE, 
+                 point.padding = unit(0.2, "lines")) +
+  theme_void()+
+  ggtitle(label = paste("Selected words for topic", topic_to_look))
 ```
 
