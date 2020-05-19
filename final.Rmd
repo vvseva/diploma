@@ -714,14 +714,13 @@ kwr %>%
 
 
 ```{r}
-DS = c("probabilistic model*", "regression*", "machine learning", "data mining", "probanilit*", "logistic", "gini", "loss", "sensitivity analysis*", "factorial design", "process model", "microsimulation", "time series") %>% as_tibble()
+DS = c("gini", "loss", "sensitivity analysis*", "factorial design", "process model", "microsimulation") %>% as_tibble()
 
-Rules = c("decision rule*", "decision tree*", "decision process*",
-          "simple rule*", "fuzzy", "working memory", "ifelse", "decision rule*", "behavior rule*", "set of rules", "dummy", "synthetic", "individual actor*", "dynamics model*", "emerg*")%>% as_tibble()
+Rules = c("decision tree*", "decision process*", "dummy", "synthetic", "individual actor*", "dynamics model*", "emerg*")%>% as_tibble()
 
 Networks = c("social network*", "odd", "peer effect*") %>% as_tibble()
 
-Theory = c("bounded*", "bias*", "planned behav*", "satisficing", "desire*", "belief*" ,"social norm*", "risk aversion", "prospect*", "payoff*", "game theory", "reward*", "bdi", "hueristic*", "complex*", "complexit*", "cooperat*", "dilemma", "bounded confid*", "complex system*", "social system*", "social interaction*", "opinion dynamics", "conceptual model", "synthetic population", "opinion formation", "social impact", "multi-agent", "social norm") %>% as_tibble()
+Theory = c("bias*", "planned behav*", "social norm*", "risk aversion", "prospect*", "payoff*", "reward*", "hueristic*", "complex*", "cooperat*", "social system*", "social interaction*", "opinion dynamics", "conceptual model", "opinion formation", "social impact", "multi-agent", "social norm") %>% as_tibble()
 
 Compute = c("utilit*") %>% as_tibble()
 
@@ -744,10 +743,17 @@ dictionary_max_names =tibble() %>%
 dictionary_max = setNames(dictionary_max, dictionary_max_names$id)
 
 
-dictionary_max[["optimization"]] = c("optimization", "minimization", "maximization", "optimiz*", "minimiz*", "maximiz*")
-dictionary_max[["networks"]] = c("network*", "edge*", "node*", "centrality")
-dictionary_max[["barabasi"]] = c("barabasi", "scale free", "ba network", "random betwork", "preferential attachment")
-dictionary_max[["watts"]] = c("small world", "watts", "small-world")
+dictionary_max[["δoptimization"]] = c("optimization", "minimization", "maximization", "optimiz*", "minimiz*", "maximiz*")
+#dictionary_max[["networks"]] = c("network*", "edge*", "node*", "centrality")
+dictionary_max[["δscalefree"]] = c("barabasi", "scale free", "ba network", "random betwork", "preferential attachment")
+dictionary_max[["δsmallworl"]] = c("small world", "watts", "small-world")
+dictionary_max[["δrules"]] = c("decision rule*", "simple rule*", "set of rules", "behavior rule*", "working memory", "wm", "ifelse")
+dictionary_max[["δbdi"]] = c("bdi", "desire*", "belief*", "intention*")
+dictionary_max[["δmachinelearning"]]  =c("machine learning", "probabilistic model*", "regression*", "data mining", "probanilit*", "logistic", "time series", "fuzzy")
+dictionary_max[["δgametheory"]] = c("game theory", "dilemma")
+dictionary_max[["δboundedrationality"]] = c("bounded*", "satisficing")
+dictionary_max[["δgis"]] = c("spatial", "gis")
+dictionary_max[["δnetworks"]] = c("social network*", "complex network*")
 ```
 
 ```{r}
@@ -758,9 +764,9 @@ corpus_max <- corpus(texts_modeling_max_c)
 
 
 ```{r}
-kwic(corpus_max, pattern = phrase("degree dependence*")
+kwic(corpus_max, pattern = phrase("spatial")
        # phrase(paste(dictionary_max %>% .[[6]] ))
-     , valuetype = "glob", window = 10) %>% 
+     , valuetype = "glob", window = 10) %>%
   kable()
 ```
 
@@ -781,7 +787,7 @@ topfeatures(dfm_max, 20)
 convert(dfm_max, to = "data.frame") -> dfm_max_df
 dfm_max_df$doc_id = texts_modeling_max_c$doi
 
-dfm_max_df %>% filter(`complexit*` > 0)
+# dfm_max_df %>% filter(`complexit*` > 0)
 
 names(dfm_max_df) = names(dfm_max_df) %>% str_remove_all("-")
 ```
@@ -813,8 +819,8 @@ words_long_c <- texts_words_long_c %>%
 
 
 words_long_c %>%
-  count(word, sort = TRUE)
-
+  count(word, sort = TRUE)->
+  words_count
 
 title_word_pairs <- words_long_c %>% 
   pairwise_count(word, doi, sort = TRUE, upper = FALSE)
@@ -823,11 +829,19 @@ title_word_pairs %>% head(60) %>% kable()
 ```
 
 ```{r}
+
+
+
 title_word_pairs %>%
   filter(n >= 2) %>%
-  graph_from_data_frame() %>% 
+  graph_from_data_frame()->g
+
+V(g)$name
+
   ggraph(layout = "fr") +
-  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_edge_link(aes(edge_alpha = n
+                     # , edge_width = n
+                     ), edge_colour = "cyan4") +
   geom_node_point(size = 5
                   # , aes(color = cluster)
                   ) +
@@ -953,9 +967,6 @@ td_gamma_author %>%
 
 topic_to_look = 18
 
-words_long_c %>% 
-  filter(doi %in% (stm_topic_doi %>% filter(topic == topic_to_look) %>% select(doi) %>% pull()) ) %>% select(doi) %>% unique() %>% count()
-
 
 
 words_long_c %>% 
@@ -967,7 +978,9 @@ words_long_c %>%
   filter(n >= 2) %>%
   graph_from_data_frame() %>% 
   ggraph(layout = "fr") +
-  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_edge_link(aes(edge_alpha = n
+                     # , edge_width = n
+                     ), edge_colour = "cyan4") +
   geom_node_point(size = 5
                   # , aes(color = cluster)
                   ) +
@@ -980,10 +993,6 @@ words_long_c %>%
 
 ```{r}
 topic_to_look = 6
-
-words_long_c %>% 
-  filter(doi %in% (stm_topic_doi %>% filter(topic == topic_to_look) %>% select(doi) %>% pull()) ) %>% select(doi) %>% unique() %>% count()
-
 
 words_long_c %>% 
   filter(doi %in% (stm_topic_doi %>% filter(topic == topic_to_look) %>% select(doi) %>% pull()) ) %>% 
@@ -1001,3 +1010,81 @@ words_long_c %>%
   ggtitle(label = paste("Selected words for topic", topic_to_look))
 ```
 
+### PMI
+
+```{r}
+library(ggalt)
+
+texts_words_long %>% 
+  left_join(stm_topic_doi %>% select(topic, doi), by = "doi") %>% 
+  group_by(topic, words) %>% 
+  summarise(value = sum(value)) %>% 
+  filter(topic %in% c(6, 18)) %>% 
+  group_by(topic) %>% 
+  mutate(x.topic = sum(value)) %>% 
+  ungroup() %>% 
+  group_by(words) %>% 
+  mutate(y.words = sum(value)) %>% 
+  ungroup() %>% 
+  group_by(topic, words) %>% 
+  mutate(x.y = value) %>% 
+  mutate(G2 = logDice(x.y, x.topic, y.words)) %>% 
+  mutate(G2 = ifelse(G2 < 0, 0, G2)) %>% 
+  arrange(-G2)
+  select(topic, words, G2) %>% 
+  pivot_wider(names_from = topic, values_from = G2) %>% 
+  ungroup() %>% 
+  rename(words=1, topic1 = 2, topic2 = 3) %>% 
+  mutate(dif = (topic1- topic2)) %>% 
+  mutate(bigger = ifelse(topic1 - topic2 >= 0, "cyan4", "magenta4")) %>% 
+  filter(dif > 0.5 | dif < -0.5) %>% 
+  mutate(words = fct_reorder(words, dif)) %>%  
+  ggplot(aes(x = topic1, xend = topic2, y = words, color = bigger))+
+          geom_dumbbell(aes(color = bigger), size_x = 3.5, 
+                      size_xend = 3.5,colour_x="cyan4", 
+                      colour_xend = "magenta4")+
+  theme_minimal()+
+  ggtitle("Keywords between topics 6 and 18", subtitle = "G2 metrics")+
+  labs(x="logDice", y=NULL)+
+  scale_y_discrete(guide = guide_axis(n.dodge = 1))
+```
+
+```{r}
+dat <- tibble(group = rep(1:5, each = 2),
+              letter = c("a", "b",
+                         "a", "c",
+                         "a", "c",
+                         "b", "e",
+                         "b", "f"))
+dat
+
+# how informative is each letter about each other letter
+pairwise_pmi(dat, letter, group)
+pairwise_pmi(dat, letter, group, sort = TRUE)
+
+
+pairwise_pmi
+```
+
+### PMI as a measure for collocations
+
+Pointwise mutual information — PMI = log2(p(x,y)/p(x)p(y))
+
+In NLP applications, PMI score is usually transformed into the PPMI (positive
+PMI), since negative values do not make much sense for word association
+measurements. 
+
+PPMI = argmax(PMI, 0)
+
+```{r}
+ppmi <- function(f.xy, f.x, f.y) {
+   pmi <- log2((f.xy)/(f.x*f.y))
+   return(ifelse(pmi>0, pmi, 0)) 
+}
+```
+
+```{r}
+logDice <- function(f.xy, f.x, f.y) {
+    return(14 + log2( (2 * f.xy) / (f.x + f.y) ))
+}
+```
